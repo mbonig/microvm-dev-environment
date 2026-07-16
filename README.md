@@ -200,7 +200,7 @@ aws s3 cp /tmp/remote-claude-microvm.zip "s3://$ARTIFACT_BUCKET/remote-claude-mi
 #     a few seconds and first `claude` launch from 60-90s to a second or two.
 aws lambda-microvms create-microvm-image \
   --name "$IMAGE_NAME" \
-  --base-image-arn "arn:aws:lambda:$AWS_REGION:aws:microvm-image:al2023-1" \
+  --base-image-arn "arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1" \
   --build-role-arn "$BUILD_ROLE" \
   --code-artifact "{\"uri\":\"s3://$ARTIFACT_BUCKET/remote-claude-microvm.zip\"}" \
   --additional-os-capabilities '["ALL"]' \
@@ -209,7 +209,7 @@ aws lambda-microvms create-microvm-image \
   --region "$AWS_REGION"
 
 # Wait until the image state is CREATED (poll get-microvm-image); ~5-10 min.
-IMAGE_ARN="arn:aws:lambda:$AWS_REGION:$AWS_ACCOUNT:microvm-image:$IMAGE_NAME"
+IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT}:microvm-image:${IMAGE_NAME}"
 aws lambda-microvms get-microvm-image --image-identifier "$IMAGE_ARN" \
   --region "$AWS_REGION" --query state
 
