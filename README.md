@@ -3,9 +3,9 @@
 A browser-based terminal — built for the iPad, works anywhere — that runs
 [Claude Code](https://www.anthropic.com/claude-code) inside an **AWS Lambda
 MicroVM**, with a persistent home directory backed by **Amazon S3**. Open a URL,
-log in, and you're in a real shell with Claude Code running against Amazon
-Bedrock. Close the tab and come back later — your files, history, and installed
-tools are still there.
+log in, and you're in a real shell with Claude Code running against Anthropic's
+API directly (via your own Claude subscription, not Bedrock). Close the tab and
+come back later — your files, history, and installed tools are still there.
 
 > ⚠️ **This is a demo / small-team project, not a hardened product.** Auth is
 > Cognito (admin-created users, per-user MicroVMs), but the sandbox runs with a
@@ -52,7 +52,8 @@ flowchart TD
   launches or resumes **that user's own MicroVM**, and mints a short-lived auth
   token. Hand-rolled SigV4, so it's immune to AWS CLI command-name churn.
 - **MicroVM image** — Amazon Linux 2023 + Node, Python 3.13, the AWS CLI, `uv`,
-  and Claude Code (pointed at Bedrock). `terminal.js` is a WebSocket PTY server.
+  and Claude Code (talking directly to Anthropic's API). `terminal.js` is a
+  WebSocket PTY server.
   The per-user home is mounted at run time by the `/run` lifecycle hook (which
   receives the access-point id in its payload) — `mount -o accesspoint=<id>` —
   so each user gets an isolated `/home/coder` that persists across restarts.
@@ -67,18 +68,20 @@ home directory (an S3 Files access point scoped to their `sub`). Adding a user
 in the pool is all it takes — their first login provisions their VM and home on
 demand.
 
-Default model is **Claude Opus 4.8** on Bedrock; `/model` switches to Fable 5,
-Sonnet 5, or Haiku 4.5 (Fable requires US data residency, hence Opus as the
-portable default).
+Default model is **Claude Opus 4.8**; `/model` switches to Fable 5, Sonnet 5,
+or Haiku 4.5. Each user authenticates their own VM with their own Claude
+subscription — the first `claude` invocation on a fresh login prompts for
+OAuth, and the credential persists in that user's S3-backed home directory.
 
 ---
 
 ## Prerequisites
 
-- An AWS account with **Bedrock model access enabled** for whichever Claude
-  models you want to use. The default is Opus 4.8, but it runs on any Bedrock
-  Claude model — enable Haiku 4.5 alone if you want the cheapest option, and set
-  it as the default (see `microvm/terminal.js` / the seeded shell config).
+- An Anthropic account for each user — either a Console account (API-credit
+  billing) or a Claude Pro/Max subscription. Users log in from inside their
+  own MicroVM via `claude` on first run; no key is baked into the image.
+  The default model is Opus 4.8 — change it in `microvm/terminal.js` / the
+  seeded shell config if you want a cheaper default (e.g. Haiku 4.5).
 - **AWS Lambda MicroVMs** available in your region (this project uses
   `us-east-1`). MicroVMs are a newer capability — make sure your account/region
   has access.
@@ -345,8 +348,10 @@ a few things still warrant care before you point it at anything sensitive:
   instance role via IMDS), **and every user's VM shares this one role**.
   Scope `MicroVmExecutionRole` down in `template.yaml` to only the services
   your sandbox needs before using it anywhere real.
-- **Bedrock spend.** VMs can call Bedrock freely; there's no per-user budget cap
-  wired in. Add one if runaway usage is a concern.
+- **Anthropic usage.** Each user authenticates with their own Claude
+  subscription/Console account, so spend is naturally per-user rather than
+  pooled on the sandbox owner's account — but there's no in-sandbox usage cap,
+  so a runaway agent loop still burns through that user's own quota/billing.
 - **No network isolation of the workload.** MicroVMs have open outbound internet
   by default.
 

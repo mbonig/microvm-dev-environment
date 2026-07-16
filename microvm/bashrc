@@ -1,13 +1,12 @@
 export HOME=/home/coder
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION=us-east-1
-# Default model: Opus. Fable available via /model us.anthropic.claude-fable-5.
-export ANTHROPIC_MODEL=us.anthropic.claude-opus-4-8
-export ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8
-export ANTHROPIC_DEFAULT_SONNET_MODEL=us.anthropic.claude-sonnet-5
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
-export ANTHROPIC_SMALL_FAST_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+# Default model: Opus. Fable available via /model claude-fable-5.
+export ANTHROPIC_MODEL=claude-opus-4-8
+export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8
+export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 # uv/uvx state on the hardlink-capable system FS (NFS home rejects hardlinks).
 # Lets the AWS toolkit's `uvx`-launched MCP proxy run from the warmed cache.
@@ -20,5 +19,6 @@ export PS1='\[\033[1;32m\]coder@claude\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]\$ 
 cd /home/coder
 echo ""
 echo "  Claude Code sandbox  •  type 'claude' to start"
+echo "  First time here? 'claude' will prompt you to log in with your Anthropic account."
 echo "  Workspace: /home/coder/workspace  (persistent S3 storage)"
 echo ""
