@@ -220,7 +220,7 @@
 <!-- Login screen (shown first) -->
 <div id="login-screen">
   <h1>Claude Code</h1>
-  <p>iPad Sandbox</p>
+  <p>Remote Sandbox</p>
   <div class="login-form">
     <input type="email" id="login-email" placeholder="Email" autocomplete="email" inputmode="email">
     <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
@@ -255,7 +255,7 @@
 const CONFIG = window.APP_CONFIG || {};
 const TOKEN_API_URL = CONFIG.tokenApiUrl || '';
 const MAX_PANES = 4;
-const PANES_STORAGE_KEY = 'ipad-claude-panes';
+const PANES_STORAGE_KEY = 'remote-claude-panes';
 
 // ── Cognito auth ──────────────────────────────────────────────────────────────
 // amazon-cognito-identity-js persists sessions in localStorage and refreshes

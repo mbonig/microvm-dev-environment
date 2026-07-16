@@ -74,7 +74,7 @@ const s3filesHost = () => `s3files.${region()}.api.aws`;
 // Idempotent: the access-point id is cached in SSM per user after first login.
 async function ensureUserAccessPoint(sub) {
   const fsId = process.env.S3_FILES_FS_ID;
-  const cacheParam = `/ipad-claude/users/${sub}/access-point-id`;
+  const cacheParam = `/remote-claude/users/${sub}/access-point-id`;
 
   try {
     const cached = await getParam(cacheParam);
@@ -182,8 +182,8 @@ exports.handler = async (event) => {
   }
 
   // Per-user SSM keys — each user has their own MicroVM + home.
-  const mvmIdParam = `/ipad-claude/users/${sub}/mvm-identifier`;
-  const mvmEndpointParam = `/ipad-claude/users/${sub}/mvm-endpoint`;
+  const mvmIdParam = `/remote-claude/users/${sub}/mvm-identifier`;
+  const mvmEndpointParam = `/remote-claude/users/${sub}/mvm-endpoint`;
 
   // ── Ensure a live MicroVM exists for THIS user ────────────────────────────
   try {

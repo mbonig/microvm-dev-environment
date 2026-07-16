@@ -175,11 +175,11 @@ freedom here than in a typical local checkout, and different persistence rules.
   plus scoped IAM writes so you can deploy real stacks — `sam deploy`, CDK,
   CloudFormation with role creation all work. The guardrail is a permissions
   boundary: **any IAM role you create MUST carry the permissions boundary
-  `arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary`** (get the
+  `arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary`** (get the
   account id from `aws sts get-caller-identity`), or the CreateRole call is
   denied with AccessDenied. How to attach it:
   - SAM: add to template.yaml — `Globals: { Function: { PermissionsBoundary:
-    arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary } }`, or
+    arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary } }`, or
     per-role via the role's `PermissionsBoundary` property.
   - CDK: `new iam.Role(..., { permissionsBoundary: ManagedPolicy.fromManagedPolicyArn(...) })`
     or the `@aws-cdk/core:permissionsBoundary` context key.
@@ -188,7 +188,7 @@ freedom here than in a typical local checkout, and different persistence rules.
   is almost always why — fix the template, don't retry blindly.
 - Hard limits (by design, do not try to work around them): no IAM users or
   access keys, no editing/removing the boundary itself, no touching the
-  sandbox's own `ipad-claude-*` roles, and roles you create are capped at
+  sandbox's own `remote-claude-*` roles, and roles you create are capped at
   this sandbox's own privilege level.
 - With great power: this role is shared across every user's VM and is billed
   to the sandbox owner's account. Create resources deliberately, prefer
