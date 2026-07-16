@@ -1,5 +1,5 @@
 #!/bin/bash
-# End-to-end deploy for ipad-claude
+# End-to-end deploy for remote-claude
 # Usage: ./scripts/deploy.sh [--skip-infra] [--skip-image] [--skip-mvm] [--recreate-image]
 #   --skip-infra   reuse the existing SAM stack (skip sam build/deploy)
 #   --skip-image   reuse the existing MicroVM image (skip the image build)
@@ -20,12 +20,11 @@ if [ ! -f "$ROOT_DIR/config.env" ]; then
 fi
 set -a; . "$ROOT_DIR/config.env"; set +a
 
-PROFILE="${AWS_PROFILE:-default}"
 REGION="${AWS_REGION:-us-east-1}"
 ACCOUNT="${AWS_ACCOUNT:?set AWS_ACCOUNT in config.env}"
-IMAGE_NAME="${IMAGE_NAME:-ipad-claude-v2}"
+IMAGE_NAME="${IMAGE_NAME:-remote-claude-v2}"
 MVM_MEMORY="${MVM_MEMORY:-8192}"
-STACK_NAME="${STACK_NAME:-ipad-claude}"
+STACK_NAME="${STACK_NAME:-remote-claude}"
 
 SKIP_INFRA=false
 SKIP_IMAGE=false
@@ -45,8 +44,8 @@ ok()  { echo -e "\033[1;32m✓ $*\033[0m"; }
 err() { echo -e "\033[1;31m✗ $*\033[0m" >&2; }
 
 # ── Verify AWS credentials ────────────────────────────────────────────────────
-log "Checking AWS credentials (profile: $PROFILE)..."
-CALLER=$(aws sts get-caller-identity --profile "$PROFILE" --output json)
+log "Checking AWS credentials..."
+CALLER=$(aws sts get-caller-identity --output json)
 ACTUAL_ACCOUNT=$(echo "$CALLER" | python3 -c "import sys,json; print(json.load(sys.stdin)['Account'])")
 if [ "$ACTUAL_ACCOUNT" != "$ACCOUNT" ]; then
   err "Expected account $ACCOUNT but got $ACTUAL_ACCOUNT"
@@ -65,7 +64,7 @@ if [ "$SKIP_INFRA" = false ]; then
   log "Deploying SAM stack '$STACK_NAME'..."
   (cd "$ROOT_DIR" && sam deploy \
     --stack-name "$STACK_NAME" \
-    --profile "$PROFILE" --region "$REGION" \
+    --region "$REGION" \
     --parameter-overrides "ImageName=$IMAGE_NAME" \
     --no-confirm-changeset --no-fail-on-empty-changeset)
   ok "SAM stack deployed"
@@ -75,7 +74,7 @@ fi
 
 # ── Read stack outputs (SAM creates a normal CloudFormation stack) ────────────
 out() { aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-  --profile "$PROFILE" --region "$REGION" \
+  --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 
 ARTIFACT_BUCKET=$(out ArtifactBucketName)
@@ -100,7 +99,7 @@ ok "Frontend        : $FRONTEND_URL"
 # account-specific values ever land in git).
 log "Injecting runtime config into frontend..."
 FRONTEND_FILE="$ROOT_DIR/frontend/index.html"
-RENDERED=/tmp/ipad-claude-index.html
+RENDERED=/tmp/remote-claude-index.html
 APP_CONFIG_JSON="{\"tokenApiUrl\":\"$TOKEN_API_URL\",\"region\":\"$REGION\",\"userPoolId\":\"$USER_POOL_ID\",\"userPoolClientId\":\"$USER_POOL_CLIENT_ID\"}"
 # Replace the whole placeholder <script> line with the injected config.
 sed "s|<script>window.APP_CONFIG = {}; /\* APP_CONFIG_PLACEHOLDER \*/</script>|<script>window.APP_CONFIG = $APP_CONFIG_JSON;</script>|" \
@@ -109,34 +108,32 @@ sed "s|<script>window.APP_CONFIG = {}; /\* APP_CONFIG_PLACEHOLDER \*/</script>|<
 # Sync updated frontend (render replaces the placeholder file in the upload dir)
 log "Syncing frontend to S3 ($FRONTEND_BUCKET)..."
 cp "$RENDERED" "$ROOT_DIR/frontend/index.html.rendered"
-aws s3 cp "$RENDERED" "s3://$FRONTEND_BUCKET/index.html" --profile "$PROFILE"
+aws s3 cp "$RENDERED" "s3://$FRONTEND_BUCKET/index.html"
 rm -f "$ROOT_DIR/frontend/index.html.rendered"
 
 if [ -n "$CF_DIST_ID" ]; then
   aws cloudfront create-invalidation \
     --distribution-id "$CF_DIST_ID" \
-    --paths "/*" \
-    --profile "$PROFILE" > /dev/null
+    --paths "/*" > /dev/null
 fi
 ok "Frontend synced and CDN invalidated"
 
 # ── Build MicroVM image ────────────────────────────────────────────────────────
 if [ "$SKIP_IMAGE" = false ]; then
   log "Packaging MicroVM source..."
-  ZIP_KEY="ipad-claude-microvm.zip"
+  ZIP_KEY="remote-claude-microvm.zip"
   rm -f /tmp/"$ZIP_KEY"
   # Render the image source to a temp build dir so the tracked microvm/ files
   # stay pristine (never bake the account-specific FS id into git). Only the
   # Dockerfile's __S3_FILES_FS_ID__ placeholder is substituted. (The FS id is
   # ALSO passed via --environment-variables at image create; the ENV line is
   # the belt-and-suspenders copy for a plain `docker build`.)
-  BUILD_DIR="/tmp/ipad-claude-microvm-build"
+  BUILD_DIR="/tmp/remote-claude-microvm-build"
   rm -rf "$BUILD_DIR"; cp -R "$ROOT_DIR/microvm" "$BUILD_DIR"
   sed -i.bak "s|^ENV S3_FILES_FS_ID=.*|ENV S3_FILES_FS_ID=${S3_FILES_FS_ID}|" "$BUILD_DIR/Dockerfile"
   rm -f "$BUILD_DIR/Dockerfile.bak"
   (cd "$BUILD_DIR" && zip -r /tmp/"$ZIP_KEY" . -x "*.DS_Store" > /dev/null)
-  aws s3 cp /tmp/"$ZIP_KEY" "s3://$ARTIFACT_BUCKET/$ZIP_KEY" \
-    --profile "$PROFILE"
+  aws s3 cp /tmp/"$ZIP_KEY" "s3://$ARTIFACT_BUCKET/$ZIP_KEY"
   ok "Source uploaded to s3://$ARTIFACT_BUCKET/$ZIP_KEY"
 
   # GA API (create-microvm-image) takes capabilities, hooks, and env vars as
@@ -166,7 +163,7 @@ if [ "$SKIP_IMAGE" = false ]; then
 
   log "Updating MicroVM image '$IMAGE_NAME' with new version..."
   IMAGE_ID=$(aws lambda-microvms list-microvm-images \
-    --profile "$PROFILE" --region "$REGION" \
+    --region "$REGION" \
     --query "items[?name=='$IMAGE_NAME'].imageArn | [0]" \
     --output text 2>/dev/null || echo "")
 
@@ -174,15 +171,15 @@ if [ "$SKIP_IMAGE" = false ]; then
   # To change capabilities, the image must be deleted and recreated.
   if [ "$RECREATE_IMAGE" = true ] && [ -n "$IMAGE_ID" ] && [ "$IMAGE_ID" != "None" ]; then
     log "Recreating image — terminating all per-user MVMs referencing it..."
-    # MVMs are per-user now (/ipad-claude/users/<sub>/mvm-identifier); any of
+    # MVMs are per-user now (/remote-claude/users/<sub>/mvm-identifier); any of
     # them may reference the image, so terminate them all before deleting it.
     TERMINATED=false
-    for OLD_MVM_ID in $(aws ssm get-parameters-by-path --path /ipad-claude/users --recursive \
-        --profile "$PROFILE" --region "$REGION" \
+    for OLD_MVM_ID in $(aws ssm get-parameters-by-path --path /remote-claude/users --recursive \
+        --region "$REGION" \
         --query "Parameters[?ends_with(Name,'mvm-identifier')].Value" --output text 2>/dev/null); do
       [ -z "$OLD_MVM_ID" ] || [ "$OLD_MVM_ID" = "None" ] && continue
       aws lambda-microvms terminate-microvm --microvm-identifier "$OLD_MVM_ID" \
-        --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
+        --region "$REGION" 2>/dev/null || true
       log "Terminated $OLD_MVM_ID"
       TERMINATED=true
     done
@@ -191,10 +188,10 @@ if [ "$SKIP_IMAGE" = false ]; then
       sleep 15
     fi
     aws lambda-microvms delete-microvm-image --image-identifier "$IMAGE_ID" \
-      --profile "$PROFILE" --region "$REGION" 2>&1 || true
+      --region "$REGION" 2>&1 || true
     # Poll until the image is gone
     for i in $(seq 1 30); do
-      STILL=$(aws lambda-microvms list-microvm-images --profile "$PROFILE" --region "$REGION" \
+      STILL=$(aws lambda-microvms list-microvm-images --region "$REGION" \
         --query "items[?name=='$IMAGE_NAME'].imageArn | [0]" --output text 2>/dev/null || echo "None")
       [ -z "$STILL" ] || [ "$STILL" = "None" ] && break
       printf "\r  Waiting for image deletion... (%d/30)" "$i"; sleep 5
@@ -214,7 +211,7 @@ if [ "$SKIP_IMAGE" = false ]; then
       --additional-os-capabilities '["ALL"]' \
       --hooks "$HOOKS_JSON" \
       --environment-variables "{\"S3_FILES_FS_ID\":\"$S3_FILES_FS_ID\"}" \
-      --profile "$PROFILE" --region "$REGION" --output json)
+      --region "$REGION" --output json)
     IMAGE_ID=$(echo "$CREATE_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['imageArn'])")
   else
     # update-microvm-image REPLACES the whole version config — capabilities, hooks,
@@ -228,14 +225,14 @@ if [ "$SKIP_IMAGE" = false ]; then
       --additional-os-capabilities '["ALL"]' \
       --hooks "$HOOKS_JSON" \
       --environment-variables "{\"S3_FILES_FS_ID\":\"$S3_FILES_FS_ID\"}" \
-      --profile "$PROFILE" --region "$REGION" --output json > /dev/null
+      --region "$REGION" --output json > /dev/null
   fi
 
   ok "Image: $IMAGE_ID — waiting for build (takes ~5-10 min)..."
   for i in $(seq 1 120); do
     IMAGE_JSON=$(aws lambda-microvms get-microvm-image \
       --image-identifier "$IMAGE_ID" \
-      --profile "$PROFILE" --region "$REGION" --output json 2>/dev/null || echo '{}')
+      --region "$REGION" --output json 2>/dev/null || echo '{}')
     BUILD_STATE=$(echo "$IMAGE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('state','UNKNOWN'))")
     LATEST_VER=$(echo "$IMAGE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('latestActiveImageVersion',''))")
     if { [ "$BUILD_STATE" = "UPDATED" ] || [ "$BUILD_STATE" = "CREATED" ]; } && [ -n "$LATEST_VER" ]; then
@@ -253,7 +250,6 @@ if [ "$SKIP_IMAGE" = false ]; then
 else
   log "Skipping image build (--skip-image)"
   IMAGE_ID=$(aws lambda-microvms list-microvm-images \
-    --profile "$PROFILE" \
     --region "$REGION" \
     --query "items[?name=='$IMAGE_NAME'].imageArn | [0]" \
     --output text)
@@ -279,7 +275,7 @@ if [ "$SKIP_MVM" = false ]; then
     --file-system-id "$S3_FILES_FS_ID" \
     --posix-user 'uid=1000,gid=1000' \
     --root-directory 'path=/users/_smoketest,creationPermissions={ownerUid=1000,ownerGid=1000,permissions=0755}' \
-    --profile "$PROFILE" --region "$REGION" \
+    --region "$REGION" \
     --query 'accessPointId' --output text 2>/dev/null || echo "")
 
   log "Launching smoke-test MicroVM..."
@@ -291,7 +287,6 @@ if [ "$SKIP_MVM" = false ]; then
     --ingress-network-connectors "[\"arn:aws:lambda:${REGION}:aws:network-connector:aws-network-connector:HTTP_INGRESS\",\"arn:aws:lambda:${REGION}:aws:network-connector:aws-network-connector:SHELL_INGRESS\"]" \
     $EGRESS_FLAG \
     ${SMOKE_AP:+--run-hook-payload "{\"accessPointId\":\"$SMOKE_AP\"}"} \
-    --profile "$PROFILE" \
     --region "$REGION" \
     --output json 2>&1)
 
@@ -328,7 +323,6 @@ if [ "$SKIP_MVM" = false ] && [ -n "$MVM_ID" ]; then
     --microvm-identifier "$MVM_ID" \
     --expiration-in-minutes 5 \
     --allowed-ports '[{"port":8080}]' \
-    --profile "$PROFILE" \
     --region "$REGION" \
     --query 'authToken."X-aws-proxy-auth"' --output text 2>/dev/null || echo "")
 
@@ -348,10 +342,10 @@ if [ "$SKIP_MVM" = false ] && [ -n "$MVM_ID" ]; then
   # are launched by the token Lambda at login.
   log "Tearing down smoke-test VM..."
   aws lambda-microvms terminate-microvm --microvm-identifier "$MVM_ID" \
-    --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
+    --region "$REGION" 2>/dev/null || true
   if [ -n "$SMOKE_AP" ] && [ "$SMOKE_AP" != "None" ]; then
     aws s3files delete-access-point --access-point-id "$SMOKE_AP" \
-      --profile "$PROFILE" --region "$REGION" 2>/dev/null || true
+      --region "$REGION" 2>/dev/null || true
   fi
   MVM_STATE="smoke-tested + torn down"
 fi
@@ -359,7 +353,7 @@ fi
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  iPad Claude Code — Deployed Successfully"
+echo "  Remote Claude Code — Deployed Successfully"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Frontend URL : $FRONTEND_URL"
 echo "  Token API    : $TOKEN_API_URL"
@@ -375,7 +369,7 @@ echo "      --user-pool-id $USER_POOL_ID \\"
 echo "      --username ${LOGIN_EMAIL:-you@example.com} \\"
 echo "      --user-attributes Name=email,Value=${LOGIN_EMAIL:-you@example.com} Name=email_verified,Value=true \\"
 echo "      --temporary-password 'ChangeMe-123!' \\"
-echo "      --profile $PROFILE --region $REGION"
+echo "      --region $REGION"
 echo ""
 echo "  Then open $FRONTEND_URL and sign in with that email + temp password."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

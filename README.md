@@ -1,11 +1,11 @@
-# iPad Claude Code
+# Remote Claude Code
 
-A browser-based terminal — built for the iPad, works anywhere — that runs
+A browser-based terminal — run Claude Code remotely from any device — that runs
 [Claude Code](https://www.anthropic.com/claude-code) inside an **AWS Lambda
 MicroVM**, with a persistent home directory backed by **Amazon S3**. Open a URL,
-log in, and you're in a real shell with Claude Code running against Amazon
-Bedrock. Close the tab and come back later — your files, history, and installed
-tools are still there.
+log in, and you're in a real shell with Claude Code running against Anthropic's
+API directly (via your own Claude subscription, not Bedrock). Close the tab and
+come back later — your files, history, and installed tools are still there.
 
 > ⚠️ **This is a demo / small-team project, not a hardened product.** Auth is
 > Cognito (admin-created users, per-user MicroVMs), but the sandbox runs with a
@@ -52,7 +52,8 @@ flowchart TD
   launches or resumes **that user's own MicroVM**, and mints a short-lived auth
   token. Hand-rolled SigV4, so it's immune to AWS CLI command-name churn.
 - **MicroVM image** — Amazon Linux 2023 + Node, Python 3.13, the AWS CLI, `uv`,
-  and Claude Code (pointed at Bedrock). `terminal.js` is a WebSocket PTY server.
+  and Claude Code (talking directly to Anthropic's API). `terminal.js` is a
+  WebSocket PTY server.
   The per-user home is mounted at run time by the `/run` lifecycle hook (which
   receives the access-point id in its payload) — `mount -o accesspoint=<id>` —
   so each user gets an isolated `/home/coder` that persists across restarts.
@@ -67,18 +68,20 @@ home directory (an S3 Files access point scoped to their `sub`). Adding a user
 in the pool is all it takes — their first login provisions their VM and home on
 demand.
 
-Default model is **Claude Opus 4.8** on Bedrock; `/model` switches to Fable 5,
-Sonnet 5, or Haiku 4.5 (Fable requires US data residency, hence Opus as the
-portable default).
+Default model is **Claude Opus 4.8**; `/model` switches to Fable 5, Sonnet 5,
+or Haiku 4.5. Each user authenticates their own VM with their own Claude
+subscription — the first `claude` invocation on a fresh login prompts for
+OAuth, and the credential persists in that user's S3-backed home directory.
 
 ---
 
 ## Prerequisites
 
-- An AWS account with **Bedrock model access enabled** for whichever Claude
-  models you want to use. The default is Opus 4.8, but it runs on any Bedrock
-  Claude model — enable Haiku 4.5 alone if you want the cheapest option, and set
-  it as the default (see `microvm/terminal.js` / the seeded shell config).
+- An Anthropic account for each user — either a Console account (API-credit
+  billing) or a Claude Pro/Max subscription. Users log in from inside their
+  own MicroVM via `claude` on first run; no key is baked into the image.
+  The default model is Opus 4.8 — change it in `microvm/terminal.js` / the
+  seeded shell config if you want a cheaper default (e.g. Haiku 4.5).
 - **AWS Lambda MicroVMs** available in your region (this project uses
   `us-east-1`). MicroVMs are a newer capability — make sure your account/region
   has access.
@@ -106,13 +109,13 @@ step. They're a teaching aid, not a substitute for the script.
 
 ```bash
 cp config.env.example config.env
-$EDITOR config.env       # set AWS_ACCOUNT, AWS_PROFILE, AWS_REGION, ...
-source config.env        # exports AWS_PROFILE / AWS_REGION / IMAGE_NAME / STACK_NAME
+$EDITOR config.env       # set AWS_ACCOUNT, AWS_REGION, ...
+source config.env        # exports AWS_REGION / IMAGE_NAME / STACK_NAME
 
 # Helper used by every stage below — pulls one stack output by key.
 # (Depends on the vars just sourced; define it in this same shell.)
 out() { aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+  --region "$AWS_REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 ```
 
@@ -131,7 +134,7 @@ sam build
 
 sam deploy \
   --stack-name "$STACK_NAME" \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+  --region "$AWS_REGION" \
   --parameter-overrides "ImageName=$IMAGE_NAME" \
   --capabilities CAPABILITY_NAMED_IAM \
   --resolve-s3 --no-confirm-changeset
@@ -143,7 +146,7 @@ filesystem — no manual filesystem step. Inspect all outputs any time with:
 
 ```bash
 aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+  --region "$AWS_REGION" \
   --query "Stacks[0].Outputs" --output table
 ```
 
@@ -164,9 +167,9 @@ JSON
 sed "s|<script>window.APP_CONFIG = {}; /\* APP_CONFIG_PLACEHOLDER \*/</script>|<script>window.APP_CONFIG = $CONFIG;</script>|" \
   frontend/index.html > /tmp/index.html
 
-aws s3 cp /tmp/index.html "s3://$(out FrontendBucketName)/index.html" --profile "$AWS_PROFILE"
+aws s3 cp /tmp/index.html "s3://$(out FrontendBucketName)/index.html"
 aws cloudfront create-invalidation --distribution-id "$(out CloudFrontDistributionId)" \
-  --paths "/*" --profile "$AWS_PROFILE"
+  --paths "/*"
 ```
 
 ### Stage 3 — MicroVM image + launch
@@ -184,9 +187,8 @@ S3_FILES_FS_ID=$(out S3FilesFileSystemId)   # the stack created this in Stage 1
 # 3a. Package the image source (substitute the FS ID placeholder first) and upload.
 sed "s|__S3_FILES_FS_ID__|$S3_FILES_FS_ID|" microvm/Dockerfile > /tmp/Dockerfile.built
 cp /tmp/Dockerfile.built microvm/Dockerfile
-(cd microvm && zip -r /tmp/ipad-claude-microvm.zip . -x "*.DS_Store")
-aws s3 cp /tmp/ipad-claude-microvm.zip "s3://$ARTIFACT_BUCKET/ipad-claude-microvm.zip" \
-  --profile "$AWS_PROFILE"
+(cd microvm && zip -r /tmp/remote-claude-microvm.zip . -x "*.DS_Store")
+aws s3 cp /tmp/remote-claude-microvm.zip "s3://$ARTIFACT_BUCKET/remote-claude-microvm.zip"
 
 # 3b. Create the MicroVM image. --additional-os-capabilities '["ALL"]' grants
 #     CAP_SYS_ADMIN (needed to mount S3 Files) and ONLY applies at create time.
@@ -200,16 +202,16 @@ aws lambda-microvms create-microvm-image \
   --name "$IMAGE_NAME" \
   --base-image-arn "arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1" \
   --build-role-arn "$BUILD_ROLE" \
-  --code-artifact "{\"uri\":\"s3://$ARTIFACT_BUCKET/ipad-claude-microvm.zip\"}" \
+  --code-artifact "{\"uri\":\"s3://$ARTIFACT_BUCKET/remote-claude-microvm.zip\"}" \
   --additional-os-capabilities '["ALL"]' \
   --hooks '{"port":9000,"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":180,"validate":"ENABLED","validateTimeoutInSeconds":300},"microvmHooks":{"run":"ENABLED","runTimeoutInSeconds":10,"resume":"ENABLED","resumeTimeoutInSeconds":10,"suspend":"ENABLED","suspendTimeoutInSeconds":10,"terminate":"ENABLED","terminateTimeoutInSeconds":10}}' \
   --environment-variables "{\"S3_FILES_FS_ID\":\"$S3_FILES_FS_ID\"}" \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION"
+  --region "$AWS_REGION"
 
 # Wait until the image state is CREATED (poll get-microvm-image); ~5-10 min.
 IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT}:microvm-image:${IMAGE_NAME}"
 aws lambda-microvms get-microvm-image --image-identifier "$IMAGE_ARN" \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION" --query state
+  --region "$AWS_REGION" --query state
 
 ```
 
@@ -232,7 +234,7 @@ aws cognito-idp admin-create-user \
   --username you@example.com \
   --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
   --temporary-password 'ChangeMe-123!' \
-  --profile "$AWS_PROFILE" --region "$AWS_REGION"
+  --region "$AWS_REGION"
 ```
 
 This creates the user with a **temporary password**. On first sign-in the app
@@ -248,7 +250,7 @@ prompts them to choose a new permanent one (Cognito's standard
   aws cognito-idp admin-set-user-password \
     --user-pool-id "$USER_POOL_ID" --username you@example.com \
     --password 'YourReal-Password1!' --permanent \
-    --profile "$AWS_PROFILE" --region "$AWS_REGION"
+    --region "$AWS_REGION"
   ```
 
 Now open the CloudFront URL, sign in with that email and password, and you're in
@@ -288,16 +290,16 @@ Deploying is the only script you need for normal use — once `deploy.sh`
 finishes, everything runs from the browser. The helpers in `tools/` are
 optional break-glass utilities for reaching *into* a running MicroVM (which has
 no SSH; access is over the service ingress connectors). They read
-`AWS_PROFILE` / `AWS_REGION` from your environment — export them (or `source
+`AWS_REGION` from your environment — export it (or `source
 config.env`) first:
 
 ```bash
-export AWS_PROFILE=your-profile AWS_REGION=us-east-1
+export AWS_REGION=us-east-1
 cd tools && npm install && cd ..   # first time only (installs the `ws` client)
 ```
 
 MicroVMs are per-user, so both tools need to know **which** user's VM to reach —
-pass `--user <email>` (or set `IPAD_CLAUDE_USER`). The user must have logged in
+pass `--user <email>` (or set `REMOTE_CLAUDE_USER`). The user must have logged in
 at least once so their VM exists.
 
 - **Interactive shell into a user's MicroVM** (SSH-equivalent, over SHELL_INGRESS):
@@ -340,13 +342,15 @@ a few things still warrant care before you point it at anything sensitive:
   must carry it, it caps those roles at the sandbox's own privilege level, and
   it self-propagates to roles *they* create. IAM users/access keys are never
   grantable, the boundary itself can't be edited or detached, and the
-  sandbox's own `ipad-claude-*` roles are off-limits. Anything Claude (or the
+  sandbox's own `remote-claude-*` roles are off-limits. Anything Claude (or the
   user) runs in the terminal wields these credentials (resolved from the
   instance role via IMDS), **and every user's VM shares this one role**.
   Scope `MicroVmExecutionRole` down in `template.yaml` to only the services
   your sandbox needs before using it anywhere real.
-- **Bedrock spend.** VMs can call Bedrock freely; there's no per-user budget cap
-  wired in. Add one if runaway usage is a concern.
+- **Anthropic usage.** Each user authenticates with their own Claude
+  subscription/Console account, so spend is naturally per-user rather than
+  pooled on the sandbox owner's account — but there's no in-sandbox usage cap,
+  so a runaway agent loop still burns through that user's own quota/billing.
 - **No network isolation of the workload.** MicroVMs have open outbound internet
   by default.
 
@@ -361,7 +365,7 @@ including role creation — with one requirement: **every IAM role created from
 inside the sandbox must carry the permissions boundary**
 
 ```
-arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary
+arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary
 ```
 
 (get the account id from `aws sts get-caller-identity`). A `CreateRole`
@@ -373,7 +377,7 @@ without it is denied — if a deploy fails with `AccessDenied` on
   ```yaml
   Globals:
     Function:
-      PermissionsBoundary: arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary
+      PermissionsBoundary: arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary
   ```
 
   or per-role via the `PermissionsBoundary` property on `AWS::IAM::Role`.
@@ -383,17 +387,17 @@ without it is denied — if a deploy fails with `AccessDenied` on
   ```json
   // cdk.json
   { "context": { "@aws-cdk/core:permissionsBoundary": {
-      "name": "ipad-claude-sandbox-boundary" } } }
+      "name": "remote-claude-sandbox-boundary" } } }
   ```
 
   or per-role: `new iam.Role(..., { permissionsBoundary:
-  iam.ManagedPolicy.fromManagedPolicyName(this, 'Pb', 'ipad-claude-sandbox-boundary') })`.
+  iam.ManagedPolicy.fromManagedPolicyName(this, 'Pb', 'remote-claude-sandbox-boundary') })`.
 
 - **CLI** —
 
   ```bash
   aws iam create-role --role-name my-role \
-    --permissions-boundary arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary \
+    --permissions-boundary arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary \
     --assume-role-policy-document file://trust.json
   ```
 

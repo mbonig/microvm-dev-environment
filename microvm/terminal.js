@@ -23,14 +23,13 @@ const SHELL_ENV = {
   USER: 'coder',
   LOGNAME: 'coder',
   SHELL: '/usr/bin/zsh',
-  CLAUDE_CODE_USE_BEDROCK: '1',
   AWS_REGION: 'us-east-1',
-  // Default model: Opus. Fable available via /model us.anthropic.claude-fable-5.
-  ANTHROPIC_MODEL: 'us.anthropic.claude-opus-4-8',
-  ANTHROPIC_DEFAULT_OPUS_MODEL: 'us.anthropic.claude-opus-4-8',
-  ANTHROPIC_DEFAULT_SONNET_MODEL: 'us.anthropic.claude-sonnet-5',
-  ANTHROPIC_DEFAULT_HAIKU_MODEL: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
-  ANTHROPIC_SMALL_FAST_MODEL: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // Default model: Opus. Fable available via /model claude-fable-5.
+  ANTHROPIC_MODEL: 'claude-opus-4-8',
+  ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8',
+  ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5',
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5',
+  ANTHROPIC_SMALL_FAST_MODEL: 'claude-haiku-4-5',
   // uv/uvx state on the hardlink-capable system FS (NFS home rejects hardlinks),
   // so the AWS toolkit's uvx-launched MCP proxy runs from the warmed /opt cache.
   UV_CACHE_DIR: '/opt/uv/cache',

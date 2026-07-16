@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  iPad Claude Code — browser terminal running Claude Code in per-user AWS Lambda
+  Remote Claude Code — browser terminal running Claude Code in per-user AWS Lambda
   MicroVMs, with Cognito auth and per-user S3 Files home directories.
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ Description: >
 Parameters:
   ImageName:
     Type: String
-    Default: ipad-claude-v2
+    Default: remote-claude-v2
     Description: Name of the Lambda MicroVM image (built out-of-band by deploy.sh).
 
 Globals:
@@ -43,7 +43,7 @@ Resources:
       CidrBlock: 10.0.0.0/16
       EnableDnsSupport: true
       EnableDnsHostnames: true
-      Tags: [{ Key: Name, Value: ipad-claude-vpc }]
+      Tags: [{ Key: Name, Value: remote-claude-vpc }]
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -255,7 +255,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      UserPoolName: ipad-claude-users
+      UserPoolName: remote-claude-users
       AdminCreateUserConfig: { AllowAdminCreateUserOnly: true }
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
@@ -278,7 +278,7 @@ Resources:
     Type: AWS::Cognito::UserPoolClient
     Properties:
       UserPoolId: !Ref UserPool
-      ClientName: ipad-claude-web
+      ClientName: remote-claude-web
       GenerateSecret: false
       ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
       AccessTokenValidity: 1
@@ -322,11 +322,11 @@ Resources:
   # roles created by created roles are capped identically (self-propagating).
   # Name is fixed (not stack-derived) because the in-VM CLAUDE.md briefing
   # must be able to state the ARN statically — repo convention, same as the
-  # hardcoded /ipad-claude/* SSM prefix and function name.
+  # hardcoded /remote-claude/* SSM prefix and function name.
   SandboxPermissionsBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: ipad-claude-sandbox-boundary
+      ManagedPolicyName: remote-claude-sandbox-boundary
       Description: Caps IAM roles created from inside the sandbox at sandbox privilege level.
       PolicyDocument:
         Version: "2012-10-17"
@@ -350,7 +350,7 @@ Resources:
             Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
             Condition:
               StringEquals:
-                iam:PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ipad-claude-sandbox-boundary"
+                iam:PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/remote-claude-sandbox-boundary"
           - Sid: RoleLifecycle
             Effect: Allow
             Action: [iam:DeleteRole, iam:UpdateRole, iam:UpdateRoleDescription, iam:UpdateAssumeRolePolicy, iam:TagRole, iam:UntagRole, iam:CreateServiceLinkedRole]
@@ -366,7 +366,7 @@ Resources:
           - Sid: DenyBoundaryTamper
             Effect: Deny
             Action: [iam:CreatePolicyVersion, iam:DeletePolicy, iam:DeletePolicyVersion, iam:SetDefaultPolicyVersion]
-            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ipad-claude-sandbox-boundary"
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/remote-claude-sandbox-boundary"
           - Sid: DenyBoundaryRemoval
             Effect: Deny
             Action: iam:DeleteRolePermissionsBoundary
@@ -374,13 +374,15 @@ Resources:
           - Sid: DenyTouchSandboxInfra
             Effect: Deny
             Action: iam:*
-            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ipad-claude-*"
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/remote-claude-*"
 
   # MicroVM execution role — the credential the sandbox operates with.
   # AWS managed PowerUserAccess (full service access minus IAM/Orgs), plus
-  # inline Bedrock + S3 Files client-mount permissions, plus boundary-gated
-  # IAM writes (ScopedIamWrites) so `sam deploy` / CDK work from inside the
-  # sandbox without granting open-ended IAM. See README SECURITY.
+  # inline S3 Files client-mount permissions, plus boundary-gated IAM writes
+  # (ScopedIamWrites) so `sam deploy` / CDK work from inside the sandbox
+  # without granting open-ended IAM. Claude Code itself talks directly to
+  # Anthropic's API (per-user OAuth login, not this role) — no Bedrock grant
+  # needed here. See README SECURITY.
   MicroVmExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -394,23 +396,10 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/PowerUserAccess
       Policies:
-        - PolicyName: BedrockAndS3Files
+        - PolicyName: S3FilesAccess
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # The models are `us.anthropic.*` cross-region inference profiles.
-              # Invoking one needs BOTH the inference-profile ARN (in the deploy
-              # region) AND the underlying foundation-model ARNs in every region
-              # the US profile can route to (us-east-1 / us-east-2 / us-west-2).
-              # This is redundant while PowerUserAccess is attached, but makes the
-              # README's "scope PowerUserAccess down" advice actually safe.
-              - Effect: Allow
-                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
-                Resource:
-                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-*"
-                  - arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*
-                  - arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-*
-                  - arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-*
               - Effect: Allow
                 Action: [s3files:ClientMount, s3files:ClientWrite]
                 Resource: "*"
@@ -423,7 +412,7 @@ Resources:
         # propagates the same cap to roles it creates in turn. Escalation
         # paths are closed: no boundary-free role writes, no IAM users or
         # access keys (never granted), no editing/removing the boundary, no
-        # touching the sandbox's own ipad-claude-* roles.
+        # touching the sandbox's own remote-claude-* roles.
         - PolicyName: ScopedIamWrites
           PolicyDocument:
             Version: "2012-10-17"
@@ -466,7 +455,7 @@ Resources:
               - Sid: DenyTouchSandboxInfra
                 Effect: Deny
                 Action: iam:*
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/ipad-claude-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/remote-claude-*"
 
   # ── Compute: token-vending Lambda + API ──────────────────────────────────────
   TokenApi:
@@ -489,7 +478,7 @@ Resources:
   TokenFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: ipad-claude-token-vend
+      FunctionName: remote-claude-token-vend
       CodeUri: functions/token-vend/
       Handler: index.handler
       Environment:
@@ -502,13 +491,13 @@ Resources:
           WORKSPACE_BUCKET_ARN: !GetAtt WorkspaceBucket.Arn
       Policies:
         # SAM policy templates first:
-        - SSMParameterWithSlashPrefixReadPolicy: { ParameterName: /ipad-claude/* }
+        - SSMParameterWithSlashPrefixReadPolicy: { ParameterName: /remote-claude/* }
         # Then inline for permissions with no policy-template equivalent:
         - Statement:
             - Sid: SsmWritePerUserState
               Effect: Allow
               Action: [ssm:PutParameter, ssm:GetParameter]
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ipad-claude/*"
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/remote-claude/*"
             - Sid: PerUserAccessPoints
               Effect: Allow
               Action: [s3files:CreateAccessPoint, s3files:GetAccessPoint, s3files:ListAccessPoints, s3files:DeleteAccessPoint]
@@ -544,7 +533,7 @@ Resources:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: iPad Claude Code frontend
+        Comment: Remote Claude Code frontend
         Enabled: true
         DefaultRootObject: index.html
         Origins:
@@ -609,7 +598,7 @@ Resources:
   VpcEgressConnector:
     Type: AWS::Lambda::NetworkConnector
     Properties:
-      Name: ipad-claude-vpc-egress
+      Name: remote-claude-vpc-egress
       Configuration:
         VpcEgressConfiguration:
           SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]

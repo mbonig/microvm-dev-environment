@@ -165,18 +165,25 @@ freedom here than in a typical local checkout, and different persistence rules.
   should keep caches/state outside home: uv is already configured for /opt/uv;
   point similar tools at /tmp or /opt if they fail oddly in $HOME.
 
-## Credentials and AWS access
-- There are no API keys anywhere. AWS access comes from the VM's IAM execution
-  role via IMDSv2. You (Claude Code) run through Amazon Bedrock using that role.
+## Claude Code authentication
+- You (Claude Code) talk directly to Anthropic's API — not Bedrock, and no key
+  is baked into the image. Auth is the user's own Claude subscription via
+  OAuth: if you're not already logged in, running `claude` prompts for login.
+  The credential is written under `~/.claude` on the persistent home mount, so
+  this only happens once per user, not once per VM boot/resume.
+
+## AWS access
+- AWS access comes from the VM's IAM execution role via IMDSv2 — this is
+  separate from how Claude Code itself authenticates (above).
 - The role is broad by design: PowerUserAccess (full access to AWS services)
   plus scoped IAM writes so you can deploy real stacks — `sam deploy`, CDK,
   CloudFormation with role creation all work. The guardrail is a permissions
   boundary: **any IAM role you create MUST carry the permissions boundary
-  `arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary`** (get the
+  `arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary`** (get the
   account id from `aws sts get-caller-identity`), or the CreateRole call is
   denied with AccessDenied. How to attach it:
   - SAM: add to template.yaml — `Globals: { Function: { PermissionsBoundary:
-    arn:aws:iam::<account-id>:policy/ipad-claude-sandbox-boundary } }`, or
+    arn:aws:iam::<account-id>:policy/remote-claude-sandbox-boundary } }`, or
     per-role via the role's `PermissionsBoundary` property.
   - CDK: `new iam.Role(..., { permissionsBoundary: ManagedPolicy.fromManagedPolicyArn(...) })`
     or the `@aws-cdk/core:permissionsBoundary` context key.
@@ -185,7 +192,7 @@ freedom here than in a typical local checkout, and different persistence rules.
   is almost always why — fix the template, don't retry blindly.
 - Hard limits (by design, do not try to work around them): no IAM users or
   access keys, no editing/removing the boundary itself, no touching the
-  sandbox's own `ipad-claude-*` roles, and roles you create are capped at
+  sandbox's own `remote-claude-*` roles, and roles you create are capped at
   this sandbox's own privilege level.
 - With great power: this role is shared across every user's VM and is billed
   to the sandbox owner's account. Create resources deliberately, prefer
@@ -207,18 +214,20 @@ freedom here than in a typical local checkout, and different persistence rules.
   curl -s "wttr.in/London?format=3"
 EOF
 
-# Bedrock — uses execution role via IMDSv2
 ENV HOME=/home/coder
-ENV S3_FILES_FS_ID=__S3_FILES_FS_ID__
-ENV CLAUDE_CODE_USE_BEDROCK=1
+ENV S3_FILES_FS_ID=fs-0c0e01e494963d93d
+# AWS CLI/SDK default region for in-sandbox deploys (sam/CDK) — unrelated to
+# Claude Code, which talks directly to Anthropic's API (see below), not Bedrock.
 ENV AWS_REGION=us-east-1
-# Default model: Opus (Fable requires US data residency; users may be outside US).
-# Fable available via: /model us.anthropic.claude-fable-5
-ENV ANTHROPIC_MODEL=us.anthropic.claude-opus-4-8
-ENV ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8
-ENV ANTHROPIC_DEFAULT_SONNET_MODEL=us.anthropic.claude-sonnet-5
-ENV ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
-ENV ANTHROPIC_SMALL_FAST_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+# Claude Code — direct Anthropic API, no Bedrock, no baked-in key. Each user
+# authenticates their own VM once via `claude` (OAuth login against their
+# Claude subscription); the credential persists on their S3-backed home.
+# Fable available via: /model claude-fable-5
+ENV ANTHROPIC_MODEL=claude-opus-4-8
+ENV ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8
+ENV ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
+ENV ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+ENV ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 ENV DISABLE_AUTOUPDATER=1
 ENV DO_NOT_TRACK=1
