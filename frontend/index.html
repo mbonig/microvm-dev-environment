@@ -122,6 +122,22 @@
     }
     #split-btn:active { background: #1a4a8a; }
     #split-btn:disabled { opacity: 0.4; cursor: default; }
+    /* Terminate is destructive — red-tinted so it never reads as a peer of Split. */
+    #terminate-btn, #start-vm-btn {
+      background: #0f3460;
+      color: #a8b2d8;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    #terminate-btn { background: #4a1a1a; color: #ff7b72; }
+    #terminate-btn:active { background: #6b2424; }
+    #terminate-btn:disabled { opacity: 0.5; cursor: default; }
+    #start-vm-btn { background: #1a4a1a; color: #4caf50; }
+    #start-vm-btn:active { background: #256b25; }
     #status {
       font-size: 12px;
       padding: 3px 10px;
@@ -132,6 +148,7 @@
     #status.connected { background: #1a4a1a; color: #4caf50; }
     #status.error { background: #4a1a1a; color: #f44336; }
     #status.warming { background: #3d2e0f; color: #d29922; }
+    #status.terminated { background: #2a2a2a; color: #9e9e9e; }
     /* Panes: side-by-side in landscape, stacked in portrait */
     #panes {
       flex: 1;
@@ -295,6 +312,10 @@
     <h1>Claude Code</h1>
     <div id="header-actions">
       <button id="split-btn" onclick="addPane()" title="Split — open another terminal">⊞ Split</button>
+      <!-- Destructive, so it lives here rather than in the mobile key toolbar:
+           that row is rapid-fire key taps and a mis-tap would kill a running job. -->
+      <button id="terminate-btn" onclick="terminateVm()" title="Terminate the VM — stops everything running in it">⏻ Terminate</button>
+      <button id="start-vm-btn" onclick="startNewVm()" title="Launch a new VM" style="display:none">▶ Start new VM</button>
       <span id="status">Connecting…</span>
     </div>
   </div>
@@ -319,6 +340,11 @@
 // ── Config ──────────────────────────────────────────────────────────────────
 const CONFIG = window.APP_CONFIG || {};
 const TOKEN_API_URL = CONFIG.tokenApiUrl || '';
+// The terminate route is a sibling of /token on the same API, so it is derived
+// rather than injected separately — deploy.sh needs no change. If the token URL
+// ever stops ending in /token this silently produces the wrong endpoint, so
+// terminateVm() checks that the substitution actually happened.
+const VM_API_URL = TOKEN_API_URL.replace(/\/token$/, '/vm');
 const MAX_PANES = 4;
 const PANES_STORAGE_KEY = 'remote-claude-panes';
 
@@ -416,6 +442,9 @@ let vmState = 'running'; // 'running' | 'starting' | 'resuming' — from the tok
 let tokenExpiresAt = 0;
 let refreshTimer = null;
 let tokenInFlight = null; // dedup concurrent fetches from multiple panes
+// Set once the user terminates the VM. Suppresses every reconnect path until
+// they explicitly start a new one — see enterTerminatedState().
+let vmTerminated = false;
 
 const appEl = document.getElementById('app');
 const keybarEl = document.getElementById('keybar');
@@ -425,6 +454,8 @@ const loadingMsgEl = document.getElementById('loading-msg');
 const panesEl = document.getElementById('panes');
 const errorBannerEl = document.getElementById('error-banner');
 const splitBtnEl = document.getElementById('split-btn');
+const terminateBtnEl = document.getElementById('terminate-btn');
+const startVmBtnEl = document.getElementById('start-vm-btn');
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
@@ -691,6 +722,9 @@ class Pane {
   }
 
   scheduleReconnect() {
+    // The VM is gone on purpose — retrying would back off against a dead
+    // endpoint forever and read as a bug. Relaunching clears the flag.
+    if (vmTerminated) return;
     if (this.reconnectTimer || this.closed) return; // already scheduled
     let delay;
     if (isWarmingUp()) {
@@ -765,7 +799,8 @@ function savePaneIds() {
 
 function updatePaneChrome() {
   panesEl.classList.toggle('multi', panes.size > 1);
-  splitBtnEl.disabled = panes.size >= MAX_PANES;
+  // Splitting a terminated VM would open a pane with nothing to connect to.
+  splitBtnEl.disabled = vmTerminated || panes.size >= MAX_PANES;
 }
 
 function createPane(id) {
@@ -824,6 +859,13 @@ function refitPanes() {
 
 // ── Aggregate status ──────────────────────────────────────────────────────────
 function updateStatus() {
+  // Checked before warm-up and before the per-pane states: once the VM is
+  // terminated the panes are all disconnected, and "Disconnected" would read as
+  // a fault rather than something the user just asked for.
+  if (vmTerminated) {
+    setStatus('Terminated', 'terminated');
+    return;
+  }
   if (isWarmingUp()) {
     setStatus(WARMUP_STATUS[vmState], 'warming');
     loadingMsgEl.textContent = WARMUP_STATUS[vmState];
@@ -839,6 +881,90 @@ function updateStatus() {
   } else {
     setStatus('Connecting…');
   }
+}
+
+// ── Terminate / relaunch the VM ──────────────────────────────────────────────
+// The idle policy stops the VM two hours after the last inbound traffic, and
+// there is an eight-hour hard cap — but nothing lets you stop it when you know
+// you're done. This does, and the VM keeps costing money until you do.
+
+// Tear down the client side of a terminated VM. Panes are deliberately NOT
+// destroyed: their DOM and ids survive so "Start new VM" reconnects the same
+// layout instead of throwing away the split the user set up. (destroy() also
+// sends a session-kill frame, which is meaningless to a VM that no longer
+// exists.)
+function enterTerminatedState() {
+  vmTerminated = true;
+  for (const pane of panes.values()) {
+    pane.stopPing();
+    if (pane.reconnectTimer) { clearTimeout(pane.reconnectTimer); pane.reconnectTimer = null; }
+    pane.state = 'disconnected';
+    try { pane.ws?.close(); } catch {}
+    pane.ws = null;
+  }
+  // Drop the cached credential too. ensureToken() short-circuits while the
+  // token is still valid, so leaving it set would let a reconnect redial the
+  // endpoint of a VM that is already gone.
+  authToken = null;
+  mvmEndpoint = null;
+  tokenExpiresAt = 0;
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+  vmState = 'running'; // not warming — nothing is coming up
+
+  loadingEl.style.display = 'none';
+  updateStatus();
+  updateVmControls();
+}
+
+async function terminateVm() {
+  if (vmTerminated) return;
+  if (!confirm(
+    'Terminate the VM?\n\n'
+    + 'Anything running in it stops immediately.\n'
+    + 'Files in your home directory and workspace are kept.'
+  )) return;
+
+  terminateBtnEl.disabled = true;
+  const label = terminateBtnEl.textContent;
+  terminateBtnEl.textContent = 'Terminating…';
+  try {
+    if (!VM_API_URL || VM_API_URL === TOKEN_API_URL) {
+      throw new Error('terminate endpoint not configured — re-run the deploy script');
+    }
+    const jwt = await getIdToken();
+    const resp = await fetch(VM_API_URL, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    if (!resp.ok) throw new Error(`Terminate failed (${resp.status}): ${await resp.text()}`);
+    clearError(); // drop any stale "reconnecting" banner from the VM going away
+    enterTerminatedState();
+  } catch (e) {
+    // Leave the session exactly as it was — a failed terminate must not look
+    // like a successful one.
+    showError(`Could not terminate the VM: ${e.message}`);
+  } finally {
+    terminateBtnEl.disabled = false;
+    terminateBtnEl.textContent = label;
+  }
+}
+
+// GET /token already treats a TERMINATED MicroVM as "launch a fresh one", so
+// relaunching is just the normal cold-start path with the flag cleared.
+async function startNewVm() {
+  vmTerminated = false;
+  for (const pane of panes.values()) pane.reconnectAttempts = 0;
+  updateVmControls();
+  // If the token fetch fails there is still no VM, so fall back to the
+  // terminated state rather than stranding the user with no way to retry.
+  // start() leaves its own error banner up; enterTerminatedState() preserves it.
+  if (await start() === false) enterTerminatedState();
+}
+
+function updateVmControls() {
+  terminateBtnEl.style.display = vmTerminated ? 'none' : '';
+  startVmBtnEl.style.display = vmTerminated ? '' : 'none';
+  splitBtnEl.disabled = vmTerminated || panes.size >= MAX_PANES;
 }
 
 // ── Mobile key toolbar ───────────────────────────────────────────────────────
@@ -1055,7 +1181,8 @@ async function start() {
   } catch (e) {
     setStatus('Error', 'error');
     showError(`Failed to get session token: ${e.message}`);
-    return;
+    loadingEl.style.display = 'none';
+    return false; // caller decides how to recover — see startNewVm()
   }
 
   // Token fetch may have just triggered a launch/resume — reflect it right away
@@ -1070,6 +1197,7 @@ async function start() {
   }
   for (const pane of panes.values()) pane.connect();
   panes.get('main')?.focus();
+  return true;
 }
 
 function reconnect() {

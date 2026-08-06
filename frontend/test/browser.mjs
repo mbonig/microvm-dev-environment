@@ -16,7 +16,7 @@ const server = http.createServer((req, res) => {
     // runs after addInitScript, so it has to be filled here.
     const body = readFileSync(`${ROOT}/index.html`, 'utf8').replace(
       'window.APP_CONFIG = {};',
-      `window.APP_CONFIG = { tokenApiUrl: 'https://token.test/t', userPoolId: 'us-east-1_stub', userPoolClientId: 'stub' };`);
+      `window.APP_CONFIG = { tokenApiUrl: 'https://token.test/token', userPoolId: 'us-east-1_stub', userPoolClientId: 'stub' };`);
     if (process.env.MUTATE) { const [a, b] = process.env.MUTATE.split('=>'); if (!body.includes(a)) throw new Error('mutation target missing'); return respond(res, body.replace(a, b)); }
     respond(res, body);
   } catch (e) { res.writeHead(404); res.end(); }
@@ -50,7 +50,7 @@ window.AmazonCognitoIdentity = {
 
 // Records every frame the page writes, per pane socket, and never touches the net.
 const WS_STUB = `
-window.APP_CONFIG = { tokenApiUrl: 'https://token.test/t', userPoolId: 'us-east-1_stub', userPoolClientId: 'stub' };
+window.APP_CONFIG = { tokenApiUrl: 'https://token.test/token', userPoolId: 'us-east-1_stub', userPoolClientId: 'stub' };
 window.__sockets = [];
 const dec = new TextDecoder();
 class StubWS {
@@ -71,8 +71,10 @@ class StubWS {
 }
 StubWS.prototype.CONNECTING = 0; StubWS.prototype.OPEN = 1;
 window.WebSocket = StubWS;
-// Auto-accept the close-pane confirm().
-window.confirm = () => true;
+// Auto-accept confirm() by default (close-pane, terminate). Tests that need a
+// cancelled confirmation flip window.__confirmAnswer.
+window.__confirmAnswer = true;
+window.confirm = () => window.__confirmAnswer;
 `;
 
 const browser = await chromium.launch();
@@ -85,12 +87,29 @@ async function newPage(ctxOpts) {
   await page.addInitScript(WS_STUB);
   await page.route('**/amazon-cognito-identity*.js', (r) =>
     r.fulfill({ contentType: 'application/javascript', body: COGNITO_STUB }));
-  await page.route('https://token.test/**', (r) =>
-    r.fulfill({ contentType: 'application/json', body: JSON.stringify({ authToken: 'tok', endpoint: 'https://mvm.test', expiresInSeconds: 3600, vmState: 'running' }) }));
+  const tokenCalls = [];
+  let tokenStatus = 200;
+  await page.route('https://token.test/token', (r) => {
+    tokenCalls.push(r.request().method());
+    if (tokenStatus !== 200) return r.fulfill({ status: tokenStatus, contentType: 'application/json', body: '{"error":"boom"}' });
+    r.fulfill({ contentType: 'application/json', body: JSON.stringify({ authToken: 'tok', endpoint: 'https://mvm.test', expiresInSeconds: 3600, vmState: 'running' }) });
+  });
+  // Registered after /token so it wins — Playwright matches routes newest-first.
+  const terminateCalls = [];
+  let terminateStatus = 200;
+  await page.route('https://token.test/vm', (r) => {
+    terminateCalls.push({ method: r.request().method(), auth: r.request().headers()['authorization'] });
+    if (terminateStatus !== 200) return r.fulfill({ status: terminateStatus, contentType: 'text/plain', body: 'nope' });
+    r.fulfill({ contentType: 'application/json', body: JSON.stringify({ terminated: true, microvmId: 'mvm-1' }) });
+  });
   await page.goto(BASE);
   await page.waitForFunction(() => document.getElementById('app').style.display === 'flex');
   await page.waitForFunction(() => window.__sockets.length > 0 && window.__sockets[0].readyState === 1);
-  return { context, page };
+  return {
+    context, page, tokenCalls, terminateCalls,
+    setTerminateStatus: (n) => { terminateStatus = n; },
+    setTokenStatus: (n) => { tokenStatus = n; },
+  };
 }
 
 // Input frames only: drop the handshake JSON, the ttyd resize frames ('1') and
@@ -258,6 +277,103 @@ const { context, page } = await newPage({ ...devices['Pixel 7'] });
 }
 
 await context.close();
+
+// ── Terminate / relaunch (change: terminate-vm) ─────────────────────────────
+{
+  console.log('5.2 — cancelling the confirmation does nothing');
+  const t = await newPage({ viewport: { width: 1280, height: 800 } });
+  await t.page.evaluate(() => { window.__confirmAnswer = false; });
+  await t.page.locator('#terminate-btn').click();
+  await t.page.waitForTimeout(80);
+  eq(t.terminateCalls.length, 0, 'no request sent when the user cancels');
+  eq(await t.page.evaluate(() => window.__sockets[0].readyState), 1, 'socket left open');
+  eq(await t.page.evaluate(() => vmTerminated), false, 'not in terminated state');
+
+  console.log('5.1 — terminate tears the client down');
+  const errBefore = errors.length;
+  await t.page.evaluate(() => { window.__confirmAnswer = true; });
+  await t.page.locator('#terminate-btn').click();
+  await t.page.waitForFunction(() => vmTerminated === true);
+  await t.page.waitForTimeout(150);
+
+  eq(t.terminateCalls.length, 1, 'exactly one terminate request');
+  eq(t.terminateCalls[0].method, 'DELETE', 'sent as DELETE');
+  ok(/^Bearer /.test(t.terminateCalls[0].auth || ''), 'carries the bearer token',
+    JSON.stringify(t.terminateCalls[0].auth));
+  eq(await t.page.evaluate(() => window.__sockets.every((s) => s.readyState === 3)),
+    true, 'every socket closed');
+  eq(await t.page.evaluate(() => [...panes.values()].some((p) => p.reconnectTimer)),
+    false, 'no reconnect scheduled');
+  eq(await t.page.evaluate(() => [...panes.values()].some((p) => p.pingTimer)),
+    false, 'no keepalive timer left running');
+  eq(await t.page.evaluate(() => authToken), null, 'cached token discarded');
+  eq(await t.page.evaluate(() => tokenExpiresAt), 0, 'token expiry reset');
+  eq(await t.page.locator('#status').textContent(), 'Terminated', 'status reads Terminated');
+  eq(await t.page.evaluate(() => document.getElementById('status').className), 'terminated',
+    'status carries the terminated class');
+  eq(await t.page.evaluate(() => panes.size > 0), true, 'panes not destroyed');
+  eq(await t.page.locator('#split-btn').isDisabled(), true, 'split disabled while terminated');
+  eq(await t.page.locator('#terminate-btn').isVisible(), false, 'terminate button hidden');
+  eq(await t.page.locator('#start-vm-btn').isVisible(), true, 'start-new-vm button shown');
+
+  // The real failure mode this guards: a dropped socket must not restart the
+  // backoff loop against an endpoint that no longer exists.
+  const sockBefore = await t.page.evaluate(() => window.__sockets.length);
+  await t.page.evaluate(() => window.__sockets.forEach((s) => s.onclose && s.onclose()));
+  await t.page.waitForTimeout(400);
+  eq(await t.page.evaluate(() => [...panes.values()].some((p) => p.reconnectTimer)),
+    false, 'a further onclose still schedules nothing');
+  eq(await t.page.evaluate(() => window.__sockets.length), sockBefore, 'no new socket opened');
+  eq(errors.length - errBefore, 0, 'no console errors during terminate',
+    errors.slice(errBefore).join('\n    '));
+
+  console.log('5.3 — relaunch');
+  const tokenCallsBefore = t.tokenCalls.length;
+  const paneIdsBefore = await t.page.evaluate(() => [...panes.keys()]);
+  await t.page.locator('#start-vm-btn').click();
+  await t.page.waitForFunction((n) => window.__sockets.length > n, sockBefore);
+  await t.page.waitForTimeout(150);
+  ok(t.tokenCalls.length > tokenCallsBefore, 'a fresh token was fetched');
+  eq(await t.page.evaluate(() => vmTerminated), false, 'terminated state cleared');
+  eq((await t.page.evaluate(() => [...panes.keys()])).join(','), paneIdsBefore.join(','),
+    'same pane layout after relaunch');
+  eq(await t.page.evaluate(() => window.__sockets.at(-1).readyState), 1, 'reconnected');
+  eq(await t.page.locator('#terminate-btn').isVisible(), true, 'terminate button back');
+  eq(await t.page.locator('#start-vm-btn').isVisible(), false, 'start button hidden again');
+  await t.context.close();
+}
+
+{
+  console.log('5.4 — a failed terminate does not enter the terminated state');
+  const t = await newPage({ viewport: { width: 1280, height: 800 } });
+  t.setTerminateStatus(500);
+  await t.page.locator('#terminate-btn').click();
+  await t.page.waitForTimeout(250);
+  eq(t.terminateCalls.length, 1, 'request was attempted');
+  eq(await t.page.evaluate(() => vmTerminated), false, 'still not terminated');
+  eq(await t.page.evaluate(() => window.__sockets[0].readyState), 1, 'socket left open');
+  eq(await t.page.evaluate(() => authToken), 'tok', 'token retained');
+  ok(await t.page.locator('#error-banner').isVisible(), 'error surfaced to the user');
+  eq(await t.page.locator('#terminate-btn').isDisabled(), false, 're-enabled so it can be retried');
+  await t.context.close();
+}
+
+{
+  console.log('5.3b — relaunch failure falls back to the terminated state');
+  const t = await newPage({ viewport: { width: 1280, height: 800 } });
+  await t.page.locator('#terminate-btn').click();
+  await t.page.waitForFunction(() => vmTerminated === true);
+  t.setTokenStatus(500);
+  await t.page.locator('#start-vm-btn').click();
+  await t.page.waitForTimeout(400);
+  eq(await t.page.evaluate(() => vmTerminated), true, 'back in the terminated state');
+  eq(await t.page.locator('#start-vm-btn').isVisible(), true, 'user can retry');
+  ok(await t.page.locator('#error-banner').isVisible(), 'error still shown');
+  eq(await t.page.evaluate(() => document.getElementById('loading').style.display), 'none',
+    'loading overlay not left spinning');
+  await t.context.close();
+}
+
 await browser.close();
 server.close();
 

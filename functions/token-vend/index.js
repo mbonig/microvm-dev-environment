@@ -110,6 +110,18 @@ async function resumeMvm(mvmId) {
   await sigv4Request('POST', mvmHost(), `/2025-09-09/microvms/${encodeURIComponent(mvmId)}/resume`, {});
 }
 
+// TerminateMicrovm is DELETE with no body and is documented idempotent, so a
+// double-click or a retry after a network blip is harmless. A 404 means someone
+// already got there — also the caller's desired end state, so not an error.
+async function terminateMvm(mvmId) {
+  try {
+    await sigv4Request('DELETE', mvmHost(), `/2025-09-09/microvms/${encodeURIComponent(mvmId)}`, undefined);
+  } catch (e) {
+    if (e.statusCode !== 404) throw e;
+    console.log(`MVM ${mvmId} already gone (404) — treating as terminated`);
+  }
+}
+
 async function runNewMvm(accessPointId) {
   const imageArn = process.env.IMAGE_ARN;
   const executionRoleArn = process.env.EXECUTION_ROLE_ARN;
@@ -159,7 +171,7 @@ async function mintToken(mvmId) {
 exports.handler = async (event) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': process.env.ALLOWED_ORIGINS || '*',
-    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization',
   };
 
@@ -184,6 +196,48 @@ exports.handler = async (event) => {
   // Per-user SSM keys — each user has their own MicroVM + home.
   const mvmIdParam = `/remote-claude/users/${sub}/mvm-identifier`;
   const mvmEndpointParam = `/remote-claude/users/${sub}/mvm-endpoint`;
+
+  // ── DELETE /vm — terminate THIS user's MicroVM ────────────────────────────
+  // The id is read from the caller's own SSM key, so there is no request input
+  // that could name someone else's VM. We deliberately leave the parameters in
+  // place afterwards: GET /token calls getMvmState, sees TERMINATED, and
+  // launches a fresh VM, overwriting both. A stale id is self-healing, and not
+  // clearing it is what keeps this function off ssm:DeleteParameter.
+  if (method === 'DELETE') {
+    try {
+      let mvmId = '';
+      try {
+        mvmId = await getParam(mvmIdParam);
+      } catch (e) {
+        console.log(`No MVM recorded for user ${sub} — nothing to terminate`);
+      }
+
+      if (!mvmId) {
+        return {
+          statusCode: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          body: JSON.stringify({ terminated: false }),
+        };
+      }
+
+      console.log(`Terminating MVM ${mvmId} for user ${sub}…`);
+      await terminateMvm(mvmId);
+      console.log(`Terminated MVM ${mvmId}`);
+
+      return {
+        statusCode: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ terminated: true, microvmId: mvmId }),
+      };
+    } catch (err) {
+      console.error('Terminate error:', err.message);
+      return {
+        statusCode: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: err.message }),
+      };
+    }
+  }
 
   // ── Ensure a live MicroVM exists for THIS user ────────────────────────────
   try {
