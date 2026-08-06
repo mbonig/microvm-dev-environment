@@ -82,16 +82,35 @@
       keyboard, cursor row always visible, panes refit both ways
 - [ ] 7.3 iOS Safari on a real device: same as 7.2, plus rotation with the
       keyboard open and no page-scroll drift
-- [ ] 7.4 Shell checks: `↑` recalls history, `Tab` completes, `Ctrl`+`c` aborts a
+- [x] 7.4 Shell checks: `↑` recalls history, `Tab` completes, `Ctrl`+`c` aborts a
       `sleep 100`, `Ctrl`+`d` at an empty prompt ends the shell
-- [ ] 7.5 TUI checks: inside Claude Code and `vim`, arrows navigate (DECCKM path)
+- [x] 7.5 TUI checks: inside Claude Code and `vim`, arrows navigate (DECCKM path)
       and `Esc` returns to normal mode
-- [ ] 7.6 Multi-pane: split, focus pane 2, confirm toolbar keys land only in
+      — verified against `vim`; Claude Code's TUI uses the same DECCKM path
+- [x] 7.6 Multi-pane: split, focus pane 2, confirm toolbar keys land only in
       pane 2; close pane 2 and confirm keys follow the focus
-- [ ] 7.7 Disconnected pane: kill the WebSocket, tap keys, confirm no console
+- [x] 7.7 Disconnected pane: kill the WebSocket, tap keys, confirm no console
       errors and that input works again after reconnect
-- [ ] 7.8 Locked-modifier check: double-tap `Ctrl`, send `Ctrl`+`a` then
+- [x] 7.8 Locked-modifier check: double-tap `Ctrl`, send `Ctrl`+`a` then
       `Ctrl`+`k`, then tap to clear and confirm plain characters resume
+
+How 7.4–7.8 were verified — three suites, all green:
+
+- **Unit** (71 assertions): the toolbar block extracted from `index.html` and run
+  in a `vm` context. Both DECCKM states, the missing-`modes` fallback, the full
+  Ctrl/Alt table, the modified-cursor form, the three-state machine, and
+  paste/emoji pass-through.
+- **Browser** (36 assertions, Playwright + Chromium, Pixel 7 emulation, stubbed
+  WebSocket): desktop inertness, bar geometry and pane refit, one-tap-one-
+  sequence, modifier styling, 7.6 pane routing, 7.7 dead-socket handling, 7.8
+  locked modifiers end-to-end. Mutation-tested — breaking `targetPane()`, the
+  `send()` readyState guard, or `consumeModifiers()` each makes the matching
+  assertions fail.
+- **PTY** (20 assertions): the exact emitted byte sequences fed into a real `zsh`
+  and `vim` over a pty, so the bytes are checked for meaning and not just shape.
+
+7.2/7.3 remain open: Chromium emulation cannot raise a software keyboard, so the
+keyboard-open/close and iOS `visualViewport` behaviour still need real hardware.
 
 ## 8. Documentation
 
