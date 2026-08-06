@@ -1,6 +1,7 @@
 const { SSMClient, GetParameterCommand, PutParameterCommand } = require('@aws-sdk/client-ssm');
 const https = require('https');
 const crypto = require('crypto');
+const { conflictAccessPointId } = require('./conflict');
 
 const ssm = new SSMClient({ region: process.env.AWS_REGION });
 
@@ -55,7 +56,7 @@ function sigv4Request(method, hostname, path, body, service = 'lambda') {
       let data = '';
       res.on('data', d => { data += d; });
       res.on('end', () => {
-        if (res.statusCode >= 400) reject(Object.assign(new Error(`API ${res.statusCode} at ${path}: ${data}`), { statusCode: res.statusCode }));
+        if (res.statusCode >= 400) reject(Object.assign(new Error(`API ${res.statusCode} at ${path}: ${data}`), { statusCode: res.statusCode, body: data }));
         else resolve(data ? JSON.parse(data) : {});
       });
     });
@@ -90,8 +91,22 @@ async function ensureUserAccessPoint(sub) {
     },
     clientToken: `ap-${sub}`.slice(0, 64), // idempotent create per user
   };
-  const data = await sigv4Request('PUT', s3filesHost(), '/access-points', body, 's3files');
-  const apId = data.accessPointId;
+  let apId;
+  try {
+    const data = await sigv4Request('PUT', s3filesHost(), '/access-points', body, 's3files');
+    apId = data.accessPointId;
+  } catch (e) {
+    // The clientToken makes create idempotent only while the access point is
+    // *not* already recorded elsewhere. If the SSM cache is missing but the
+    // access point exists — which is exactly what a rename of the parameter
+    // path produces — the API returns 409 with the existing id. Adopt it
+    // instead of failing: the user's home is on that access point, and
+    // creating a second one is neither possible nor wanted.
+    const conflictId = conflictAccessPointId(e);
+    if (!conflictId) throw e;
+    console.log(`Access point already exists for ${sub} (${conflictId}) — adopting it`);
+    apId = conflictId;
+  }
   await putParam(cacheParam, apId);
   return apId;
 }
