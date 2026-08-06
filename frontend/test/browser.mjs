@@ -17,7 +17,16 @@ const server = http.createServer((req, res) => {
     const body = readFileSync(`${ROOT}/index.html`, 'utf8').replace(
       'window.APP_CONFIG = {};',
       `window.APP_CONFIG = { tokenApiUrl: 'https://token.test/token', userPoolId: 'us-east-1_stub', userPoolClientId: 'stub' };`);
-    if (process.env.MUTATE) { const [a, b] = process.env.MUTATE.split('=>'); if (!body.includes(a)) throw new Error('mutation target missing'); return respond(res, body.replace(a, b)); }
+    if (process.env.MUTATE) {
+      // Split on the FIRST '=>' only: the replacement routinely contains arrow
+      // functions, and splitting on all of them silently truncates it into
+      // invalid JS — which looks like the mutation 'working'.
+      const i = process.env.MUTATE.indexOf('=>');
+      if (i < 0) throw new Error("MUTATE must be 'find=>replace'");
+      const a = process.env.MUTATE.slice(0, i), b = process.env.MUTATE.slice(i + 2);
+      if (!body.includes(a)) throw new Error('mutation target missing');
+      return respond(res, body.replace(a, b));
+    }
     respond(res, body);
   } catch (e) { res.writeHead(404); res.end(); }
 });
@@ -141,7 +150,7 @@ const { context, page } = await newPage({ ...devices['Pixel 7'] });
   console.log('7.2 (emulator-observable) — geometry and refit');
   eq(await page.evaluate(() => document.body.classList.contains('touch')), true, 'body.touch set');
   const btns = await page.locator('#keybar .keybar-btn').count();
-  eq(btns, 13, '13 key buttons');
+  eq(btns, 11, '11 key buttons (no Home/End)');
   eq(await page.locator('#keybar .keybar-sep').count(), 3, '3 separators');
 
   const boxes = await page.evaluate(() =>

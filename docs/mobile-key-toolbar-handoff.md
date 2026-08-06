@@ -27,6 +27,15 @@ devices only, that emits the same byte sequences a physical keyboard would.
 **In:** `Esc`, `Tab`, `Shift-Tab`, sticky `Ctrl`, sticky `Alt`, `←` `↓` `↑` `→`,
 `Home`, `End`, `PgUp`, `PgDn`.
 
+> **`Home`/`End` depend on your shell.** The reference implementation later
+> removed both, because its login shell is `zsh` and zsh binds no sequence for
+> either — `\x1b[H`/`\x1bOH` and `\x1b[F`/`\x1bOF` all just beep, so the
+> buttons did nothing. The encoding below is correct (a physical `Home` key on a
+> real terminal sends exactly this); it is the keymap that is missing. `bash`
+> binds both out of the box, so keep them if your fork uses bash — or add
+> `bindkey` entries. Check before shipping the buttons: `Ctrl`+`a` / `Ctrl`+`e`
+> are the portable fallback.
+
 **Out (deliberate):** function keys F1–F12, a paste button, a remappable key set,
 gesture input. Touch *scrolling* is a separate concern and a separate change.
 

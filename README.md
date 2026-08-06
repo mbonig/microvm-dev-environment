@@ -282,7 +282,7 @@ the only way to stop paying for it before then.
 
 Software keyboards have no Esc, Ctrl, or arrow keys, so on touch devices a key
 bar appears below the terminal with `Esc`, `Tab`, `⇧Tab`, `Ctrl`, `Alt`, the
-arrows, and `Home`/`End`/`PgUp`/`PgDn`. It sits *above* the software keyboard and
+arrows, and `PgUp`/`PgDn`. It sits *above* the software keyboard and
 takes its own space rather than covering the terminal, so the cursor line stays
 visible. On desktop it isn't rendered at all.
 
@@ -299,8 +299,14 @@ keyboard — so `Ctrl` then `c` sends `^C`, and `Ctrl` then `→` sends word-rig
 That's why two buttons cover the whole space instead of a row of fixed `^C`/`^D`
 shortcuts.
 
-Arrow, `Home`, and `End` sequences follow the terminal's application-cursor-keys
-mode, so they work both at a shell prompt and inside full-screen programs.
+Arrow sequences follow the terminal's application-cursor-keys mode, so they work
+both at a shell prompt and inside full-screen programs.
+
+There is no `Home`/`End`: zsh — the VM's login shell — binds neither `\x1b[H`/
+`\x1bOH` nor `\x1b[F`/`\x1bOF`, so both keys only beeped at the prompt. A
+physical `Home` key is equally dead there, so this is the shell's keymap rather
+than the sequences being wrong. Use `Ctrl` + `a` / `Ctrl` + `e` instead, which
+the sticky `Ctrl` modifier makes reachable.
 
 ### Just run the script
 

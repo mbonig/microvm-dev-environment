@@ -110,7 +110,7 @@ Alternatives rejected:
   aren't part of xterm's public contract. Reading one documented mode flag is
   far less to get wrong.
 
-When a modifier is active, arrows/Home/End switch to the CSI parameterised form
+When a modifier is active, arrows switch to the CSI parameterised form
 `\x1b[1;<m><final>` with `m = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)` — e.g.
 Ctrl-→ is `\x1b[1;5C`. That form is unambiguous regardless of DECCKM, so the
 mode lookup only applies to the unmodified case.

@@ -107,8 +107,12 @@ input element, so the software keyboard stays open across repeated presses.
 ### Requirement: Base key set and sequences
 
 The toolbar SHALL provide `Esc`, `Tab`, `Shift-Tab`, `Ctrl`, `Alt`, `←`, `↓`,
-`↑`, `→`, `Home`, `End`, `PgUp`, and `PgDn`, and SHALL emit these unmodified
-sequences:
+`↑`, `→`, `PgUp`, and `PgDn`, and SHALL emit these unmodified sequences:
+
+`Home` and `End` were removed after shipping: zsh, the VM's login shell, binds
+no sequence for either, so both keys only beeped at the prompt. The encoding was
+correct — a physical `Home` key is equally dead there — but a button that does
+nothing is worse than an absent one. `Ctrl`+`a` / `Ctrl`+`e` cover the need.
 
 | Key | Bytes |
 | --- | --- |
@@ -135,7 +139,7 @@ sequences:
 
 ### Requirement: Cursor keys respect application cursor mode
 
-Arrow, `Home`, and `End` sequences SHALL be selected from the focused
+Arrow sequences SHALL be selected from the focused
 terminal's DECCKM state (`terminal.modes.applicationCursorKeysMode`) at the
 moment of the press, so full-screen programs receive the sequences their
 terminfo expects.
@@ -146,8 +150,6 @@ terminfo expects.
 | `↓` | `\x1b[B` | `\x1bOB` |
 | `→` | `\x1b[C` | `\x1bOC` |
 | `←` | `\x1b[D` | `\x1bOD` |
-| `Home` | `\x1b[H` | `\x1bOH` |
-| `End` | `\x1b[F` | `\x1bOF` |
 
 #### Scenario: History recall at a shell prompt
 

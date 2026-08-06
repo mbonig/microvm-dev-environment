@@ -21,7 +21,8 @@ motivate it.
   typed on the software keyboard — is sent with that modifier applied, then the
   modifier disarms. Double-tap latches it until tapped off.
 - Key set: `Esc`, `Tab`, `Shift-Tab`, `Ctrl`, `Alt`, `←` `↓` `↑` `→`,
-  `Home`, `End`, `PgUp`, `PgDn`. The row scrolls horizontally on narrow screens
+  `PgUp`, `PgDn`. (`Home`/`End` were dropped after shipping — zsh binds neither,
+  so they only beeped.) The row scrolls horizontally on narrow screens
   rather than wrapping or shrinking below a tappable size.
 - **The terminal is never obscured**: the toolbar occupies layout space that the
   terminal viewport shrinks to accommodate, and panes refit (`FitAddon`) so the
