@@ -256,6 +256,30 @@ prompts them to choose a new permanent one (Cognito's standard
 Now open the CloudFront URL, sign in with that email and password, and you're in
 the terminal — with your own MicroVM and persistent home.
 
+### On a phone or tablet
+
+Software keyboards have no Esc, Ctrl, or arrow keys, so on touch devices a key
+bar appears below the terminal with `Esc`, `Tab`, `⇧Tab`, `Ctrl`, `Alt`, the
+arrows, and `Home`/`End`/`PgUp`/`PgDn`. It sits *above* the software keyboard and
+takes its own space rather than covering the terminal, so the cursor line stays
+visible. On desktop it isn't rendered at all.
+
+`Ctrl` and `Alt` are **sticky**, with three states:
+
+| Taps | State | Behaviour |
+|---|---|---|
+| 1 | armed (outlined) | applies to the next key only, then clears |
+| 2 | locked (filled) | applies to every key until you tap it off |
+| 3 | off | cleared |
+
+An armed modifier applies to the next key from *either* the bar or the software
+keyboard — so `Ctrl` then `c` sends `^C`, and `Ctrl` then `→` sends word-right.
+That's why two buttons cover the whole space instead of a row of fixed `^C`/`^D`
+shortcuts.
+
+Arrow, `Home`, and `End` sequences follow the terminal's application-cursor-keys
+mode, so they work both at a shell prompt and inside full-screen programs.
+
 ### Just run the script
 
 `scripts/deploy.sh` does all of the above end-to-end: `sam build` + `sam deploy`,
