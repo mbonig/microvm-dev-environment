@@ -133,7 +133,6 @@ class Term:
 ESC, TAB, SHIFT_TAB = '\x1b', '\t', '\x1b[Z'
 UP_N, DOWN_N, RIGHT_N, LEFT_N = '\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D'
 UP_A, DOWN_A, RIGHT_A, LEFT_A = '\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD'
-HOME_N, END_N = '\x1b[H', '\x1b[F'
 CTRL_C, CTRL_D, CTRL_A, CTRL_K, CTRL_R = '\x03', '\x04', '\x01', '\x0b', '\x12'
 
 # Distinctive prompts: sync() waits for one to be redrawn as proof that the
@@ -186,40 +185,9 @@ ok('keepme' in out and 'DROPME' not in out.split('keepme')[-1],
    'Ctrl-A + → + Ctrl-K edits the line as expected', repr(out[-160:]))
 e.kill()
 
-print('Home/End — the emitted sequence is the standard xterm one (checked in bash,')
-print('           which binds it; the VM\'s zsh binds no Home/End at all — see report)')
-b = Term(['bash', '--norc'], {'PS1': BASH_PROMPT, 'EDITOR': 'emacs', 'VISUAL': 'emacs'})
-ok(b.sync(BASH_PROMPT), 'bash is up with a live line editor')
-for seq, name in [(HOME_N, 'Home \\x1b[H'), (END_N, 'End \\x1b[F')]:
-    b.clear()
-    b.send('echo XYZ', 0.3)
-    b.send(seq, 0.3)
-    ok(b'\x07' not in b.buf, f'{name} is bound by readline (no bell)', repr(b.buf[-60:]))
-    b.send(CTRL_C, 0.3)
-b.clear()
-b.send('echo XYZ', 0.3)
-b.send(HOME_N, 0.3)
-b.send('# ', 0.3)
-b.send('\n', 0.6)
-# If Home worked the line became `# echo XYZ`, a comment, so nothing is echoed.
-after_enter = b.text().split('\n', 1)[1] if '\n' in b.text() else b.text()
-ok('XYZ' not in after_enter, 'Home moved to line start in bash (line ran as a comment)',
-   repr(b.text()[-120:]))
-b.send(CTRL_D, 0.4)
-b.kill()
-
-# The same probe against zsh, reported rather than asserted: the toolbar sends
-# what a physical Home key sends, but the VM's zsh has no binding for it.
-z = Term(['zsh', '-f'], ZSH_ENV)
-z.sync(ZSH_PROMPT)
-z.send('echo XYZ', 0.3)
-z.clear()
-z.send(HOME_N, 0.4)
-BEL = b'\x07'
-print(f'    (informational) zsh -f, Home \\x1b[H: bell={BEL in z.buf}'
-      '  → unbound at the zsh prompt, works inside TUIs')
-z.kill()
-
+# The Home/End checks that used to live here are gone with the buttons: zsh binds
+# neither form, so they beeped at the prompt. That finding is why they were
+# removed; see the KEYS table in index.html.
 print('7.4 — zsh: Ctrl-C aborts a running `sleep 100`')
 t.clear()
 t.send('sleep 100\n', 0.5)

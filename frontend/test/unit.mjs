@@ -47,7 +47,7 @@ ctx.globalThis = ctx;
 vm.createContext(ctx);
 // Top-level const/let in a vm script are lexical, not global properties — hand
 // the ones under test back out explicitly.
-const EXPORTS = ['KEYS', 'modState', 'cycleModifier', 'consumeModifiers', 'applyCtrl', 'applyAlt', 'applyModifiers', 'cursorSeq'];
+const EXPORTS = ['KEYS', 'modState', 'cycleModifier', 'consumeModifiers', 'applyCtrl', 'applyAlt', 'applyModifiers', 'cursorSeq', 'CURSOR_FINALS'];
 const api = vm.runInContext(`${src}\n;({${EXPORTS.join(', ')}})`, ctx, { filename: 'index.html:keybar' });
 Object.assign(ctx, api);
 
@@ -64,6 +64,16 @@ const term = (decckm) => ({ modes: { applicationCursorKeysMode: decckm } });
 const NOMODS = { ctrl: false, alt: false };
 const press = (label, t = term(false), m = NOMODS) => key(label).seq(t, m);
 
+console.log('\nkey set — Home/End are deliberately absent');
+// zsh, the VM's login shell, binds neither \x1b[H/\x1bOH nor \x1b[F/\x1bOF, so
+// both keys only ever beeped at the prompt. Asserted so they cannot creep back
+// in without someone also fixing the shell's keymap.
+eq(key('Home'), undefined, 'no Home button');
+eq(key('End'), undefined, 'no End button');
+eq(ctx.KEYS.filter((k) => !k.sep).length, 11, '11 keys total');
+eq(ctx.CURSOR_FINALS?.home, undefined, 'home dropped from CURSOR_FINALS');
+eq(ctx.CURSOR_FINALS?.end, undefined, 'end dropped from CURSOR_FINALS');
+
 console.log('\n7.4/7.5 — literal keys');
 eq(press('Esc'), '\x1b', 'Esc');
 eq(press('Tab'), '\t', 'Tab');
@@ -72,11 +82,11 @@ eq(press('PgUp'), '\x1b[5~', 'PgUp');
 eq(press('PgDn'), '\x1b[6~', 'PgDn');
 
 console.log('7.4 — cursor keys, DECCKM off (shell prompt: ↑ recalls history)');
-for (const [label, seq] of [['↑', '\x1b[A'], ['↓', '\x1b[B'], ['→', '\x1b[C'], ['←', '\x1b[D'], ['Home', '\x1b[H'], ['End', '\x1b[F']])
+for (const [label, seq] of [['↑', '\x1b[A'], ['↓', '\x1b[B'], ['→', '\x1b[C'], ['←', '\x1b[D']])
   eq(press(label, term(false)), seq, `${label} normal`);
 
 console.log('7.5 — cursor keys, DECCKM on (vim / Claude Code TUI)');
-for (const [label, seq] of [['↑', '\x1bOA'], ['↓', '\x1bOB'], ['→', '\x1bOC'], ['←', '\x1bOD'], ['Home', '\x1bOH'], ['End', '\x1bOF']])
+for (const [label, seq] of [['↑', '\x1bOA'], ['↓', '\x1bOB'], ['→', '\x1bOC'], ['←', '\x1bOD']])
   eq(press(label, term(true)), seq, `${label} application`);
 
 console.log('7.5 — missing/renamed terminal.modes degrades to normal mode');
@@ -88,7 +98,6 @@ console.log('7.5 — modified cursor keys bypass DECCKM (unambiguous CSI form)')
 eq(press('→', term(true), { ctrl: true, alt: false }), '\x1b[1;5C', 'Ctrl-→ under DECCKM');
 eq(press('←', term(false), { ctrl: false, alt: true }), '\x1b[1;3D', 'Alt-←');
 eq(press('↑', term(true), { ctrl: true, alt: true }), '\x1b[1;7A', 'Ctrl-Alt-↑');
-eq(press('End', term(true), { ctrl: true, alt: false }), '\x1b[1;5F', 'Ctrl-End under DECCKM');
 
 console.log('7.4 — Ctrl translation on software-keyboard characters');
 const ctrlCases = [['c', 0x03], ['C', 0x03], ['d', 0x04], ['a', 0x01], ['k', 0x0b], ['z', 0x1a], ['r', 0x12],

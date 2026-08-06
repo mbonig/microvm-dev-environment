@@ -1020,13 +1020,13 @@ function applyModifiers(data) {
   return out;
 }
 
-// Arrow/Home/End encoding depends on DECCKM. At a shell prompt the CSI form is
+// Arrow encoding depends on DECCKM. At a shell prompt the CSI form is
 // right, but a program that enabled application cursor keys mode looks up
 // terminfo's \EOA and won't recognise \E[A — so arrows would silently do nothing
 // in exactly the TUI this feature exists to fix. Read the mode per press.
 // (`terminal.modes` is public API in xterm 5.3; guarded so a CDN version bump
 // degrades to normal-mode sequences rather than throwing.)
-const CURSOR_FINALS = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' };
+const CURSOR_FINALS = { up: 'A', down: 'B', right: 'C', left: 'D' };
 
 function cursorSeq(term, name, mods) {
   const final = CURSOR_FINALS[name];
@@ -1053,8 +1053,10 @@ const KEYS = [
   { label: '↑', seq: (t, m) => cursorSeq(t, 'up', m) },
   { label: '→', seq: (t, m) => cursorSeq(t, 'right', m) },
   { sep: true },
-  { label: 'Home', seq: (t, m) => cursorSeq(t, 'home', m) },
-  { label: 'End',  seq: (t, m) => cursorSeq(t, 'end', m) },
+  // No Home/End: zsh — the VM's login shell — binds neither \x1b[H/\x1bOH nor
+  // \x1b[F/\x1bOF, so both keys just beeped at the prompt. A physical Home key
+  // is equally dead there, so this is the shell's keymap, not our encoding.
+  // Ctrl-a / Ctrl-e do the same job and are reachable via the Ctrl modifier.
   { label: 'PgUp', seq: () => '\x1b[5~' },
   { label: 'PgDn', seq: () => '\x1b[6~' },
 ];
