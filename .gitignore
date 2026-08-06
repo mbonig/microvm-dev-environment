@@ -1,4 +1,8 @@
 node_modules/
+# Without slash too: the trailing-slash form only matches directories, so a
+# symlinked node_modules (handy for sharing an install between checkouts) would
+# otherwise be committed as a link into someone's filesystem.
+node_modules
 *.DS_Store
 *.bak
 /tmp/

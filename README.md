@@ -256,6 +256,28 @@ prompts them to choose a new permanent one (Cognito's standard
 Now open the CloudFront URL, sign in with that email and password, and you're in
 the terminal — with your own MicroVM and persistent home.
 
+### Stopping your VM
+
+The header has a **⏻ Terminate** button. It stops your MicroVM immediately —
+useful when you're done for the day, or when you want a clean VM after wedging
+the current one.
+
+Anything running inside stops. Your home directory and workspace are on
+persistent storage and are **kept**, so a new VM comes back with your files.
+
+After terminating, the app stays down until you press **▶ Start new VM** — it
+does not quietly relaunch. Both buttons act on your own VM only; the id comes
+from your signed-in identity, never from the request.
+
+Without it, a VM stops on its own only via the idle policy — two hours after the
+last *inbound* traffic, so closing the tab starts the clock but a job running in
+the background does not reset it — or the eight-hour hard cap. Terminating is
+the only way to stop paying for it before then.
+
+> Reloading the page after terminating launches a fresh VM, because loading the
+> app requests a session token and that launches one. Terminate when you're
+> actually done rather than as a way to park it.
+
 ### On a phone or tablet
 
 Software keyboards have no Esc, Ctrl, or arrow keys, so on touch devices a key

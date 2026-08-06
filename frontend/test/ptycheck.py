@@ -73,6 +73,44 @@ class Term:
                 out.append(ch)
         return ''.join(out)
 
+    def expect(self, pattern, timeout=15):
+        """Read until `pattern` shows up, rather than guessing with a sleep."""
+        end = time.time() + timeout
+        while time.time() < end:
+            if pattern.search(self.text()):
+                return True
+            self.read(0.15)
+        return pattern.search(self.text()) is not None
+
+    def sync(self, prompt, tag='SYNC'):
+        """Block until the line editor is live, not merely until a command ran.
+
+        Two separate things have to be true before a control character means
+        anything, and a fixed sleep guarantees neither:
+
+        1. The shell executes commands. Proved by matching the *output* of an
+           echo whose quoting differs from its command line, so the terminal's
+           echo of what we typed cannot be mistaken for the result.
+        2. The line editor owns the tty for the *next* prompt. Until it does,
+           the tty driver is still in canonical mode and echoes a control
+           character literally (^A) instead of zle acting on it — which is what
+           made this suite fail under `npm test` but pass standalone. Waiting
+           for the prompt to be redrawn after the command is that signal.
+        """
+        self.send(f"echo {tag[:2]}''{tag[2:]}-OK\n", 0.1)
+        if not self.expect(re.compile(rf'{tag}-OK')):
+            return False
+        tail = self.text().split(f'{tag}-OK')[-1]
+        end = time.time() + 15
+        while prompt not in tail and time.time() < end:
+            self.read(0.15)
+            tail = self.text().split(f'{tag}-OK')[-1]
+        if prompt not in tail:
+            return False
+
+        self.clear()
+        return True
+
     def alive(self):
         try:
             return os.waitpid(self.pid, os.WNOHANG) == (0, 0)
@@ -98,11 +136,20 @@ UP_A, DOWN_A, RIGHT_A, LEFT_A = '\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD'
 HOME_N, END_N = '\x1b[H', '\x1b[F'
 CTRL_C, CTRL_D, CTRL_A, CTRL_K, CTRL_R = '\x03', '\x04', '\x01', '\x0b', '\x12'
 
-ZSH_ENV = {'HISTFILE': '/tmp/kb-hist', 'PS1': 'PROMPT$ ', 'ZDOTDIR': '/nonexistent'}
+# Distinctive prompts: sync() waits for one to be redrawn as proof that the
+# line editor, not the tty driver, is handling input.
+ZSH_PROMPT, BASH_PROMPT = 'zsh-rdy> ', 'bash-rdy> '
+# EDITOR is pinned because `zsh -f` picks its keymap from $EDITOR/$VISUAL: with
+# EDITOR=vi (which `npm test` exports) it selects the vi keymap, where Ctrl-A and
+# Ctrl-K are unbound — arrows and Tab still work, so the failure looks like a
+# flake rather than a different keymap. Pin it so the suite tests one keymap
+# regardless of who launches it.
+ZSH_ENV = {'HISTFILE': '/tmp/kb-hist', 'PS1': ZSH_PROMPT, 'ZDOTDIR': '/nonexistent',
+           'EDITOR': 'emacs', 'VISUAL': 'emacs'}
 
 print('\n7.4 — zsh: ↑ recalls history (\\x1b[A, DECCKM off)')
 t = Term(['zsh', '-f'], ZSH_ENV)
-t.read(1.0)
+ok(t.sync(ZSH_PROMPT), 'zsh is up with a live line editor')
 t.send('echo needle-one\n', 0.5)
 t.send('echo needle-two\n', 0.5)
 t.clear()
@@ -128,7 +175,7 @@ print('7.4 — zsh: Ctrl-A/Ctrl-K line editing')
 # Its own shell: the Tab test above can leave zle in a completion-menu state,
 # and a stray control char then lands as literal text instead of a zle command.
 e = Term(['zsh', '-f'], ZSH_ENV)
-e.read(1.0)
+ok(e.sync(ZSH_PROMPT), 'line-editing shell is up with a live line editor')
 e.send('echo keepme-DROPME', 0.4)
 e.send(CTRL_A, 0.3)
 e.send(RIGHT_N * 12, 0.4)   # past "echo keepme"
@@ -141,8 +188,8 @@ e.kill()
 
 print('Home/End — the emitted sequence is the standard xterm one (checked in bash,')
 print('           which binds it; the VM\'s zsh binds no Home/End at all — see report)')
-b = Term(['bash', '--norc'], {'PS1': 'P$ '})
-b.read(0.8)
+b = Term(['bash', '--norc'], {'PS1': BASH_PROMPT, 'EDITOR': 'emacs', 'VISUAL': 'emacs'})
+ok(b.sync(BASH_PROMPT), 'bash is up with a live line editor')
 for seq, name in [(HOME_N, 'Home \\x1b[H'), (END_N, 'End \\x1b[F')]:
     b.clear()
     b.send('echo XYZ', 0.3)
@@ -164,7 +211,7 @@ b.kill()
 # The same probe against zsh, reported rather than asserted: the toolbar sends
 # what a physical Home key sends, but the VM's zsh has no binding for it.
 z = Term(['zsh', '-f'], ZSH_ENV)
-z.read(0.8)
+z.sync(ZSH_PROMPT)
 z.send('echo XYZ', 0.3)
 z.clear()
 z.send(HOME_N, 0.4)
@@ -194,7 +241,7 @@ open(vimrc, 'w').write('set nocompatible noswapfile nobackup laststatus=2 showmo
 src = '/tmp/kb-vim-file'
 open(src, 'w').write('alpha\nbravo\ncharlie\ndelta\n')
 v = Term(['vim', '-u', vimrc, src])
-v.read(1.5)
+ok(v.expect(re.compile(r'charlie')), 'vim rendered the buffer')
 ok(b'\x1b[?1h' in v.buf or b'\x1b[?1049h' in v.buf,
    'vim enabled application cursor keys mode (DECCKM)',
    'no \\x1b[?1h in output — DECCKM assumption would not hold')
@@ -261,7 +308,7 @@ v.kill()
 
 print('7.5 — normal-mode arrows do NOT work under DECCKM (why the mode lookup exists)')
 v2 = Term(['vim', '-u', vimrc, src])
-v2.read(1.5)
+v2.expect(re.compile(r'charlie'))
 v2.send(ESC, 0.2)
 before = vim_cursor(v2)
 v2.send(ESC, 0.2)
