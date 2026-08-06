@@ -84,6 +84,9 @@
       flex-direction: column;
       height: 100%;
       height: 100dvh;
+      /* --app-h is set from visualViewport on touch devices so the app is pinned
+         above the software keyboard; unset everywhere else, falling back to dvh. */
+      height: var(--app-h, 100dvh);
     }
     #header {
       display: flex;
@@ -210,9 +213,66 @@
       font-size: 14px;
       cursor: pointer;
     }
+    /* ── Mobile key toolbar ────────────────────────────────────────────────
+       A flex sibling of #panes, never an overlay: the panes shrink by exactly
+       the bar's height and their ResizeObserver refits them, so "doesn't cover
+       the terminal" is structural rather than two heights kept in sync by hand. */
+    #keybar {
+      display: none;
+      flex-shrink: 0;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+    }
+    #keybar::-webkit-scrollbar { display: none; }
+    body.touch #keybar { display: flex; }
+    .keybar-btn {
+      flex: 0 0 auto;
+      min-width: 44px;
+      height: 40px;
+      padding: 0 10px;
+      background: #0f3460;
+      color: #c9d1d9;
+      border: 1px solid #1f3a5f;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      touch-action: manipulation;      /* no double-tap-zoom delay */
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .keybar-btn:active { background: #1a4a8a; }
+    /* Sticky modifiers — off / armed (one-shot) / locked, all distinguishable */
+    .keybar-btn.mod-armed { border-color: #58a6ff; color: #58a6ff; }
+    .keybar-btn.mod-locked {
+      background: #58a6ff;
+      border-color: #58a6ff;
+      color: #0d1117;
+      font-weight: 700;
+    }
+    .keybar-sep {
+      flex: 0 0 auto;
+      width: 1px;
+      height: 24px;
+      background: #1f3a5f;
+    }
     /* iOS safe area */
     @supports (padding: env(safe-area-inset-bottom)) {
       #app { padding-bottom: env(safe-area-inset-bottom); }
+      /* With the key bar present the inset belongs to the bar, so its buttons
+         clear the home indicator instead of a dead strip sitting below them. */
+      body.touch #app { padding-bottom: 0; }
     }
   </style>
 </head>
@@ -230,7 +290,7 @@
 </div>
 
 <!-- Terminal app (shown after login) -->
-<div id="app" style="display:none; height:100%; height:100dvh; flex-direction:column;">
+<div id="app" style="display:none">
   <div id="header">
     <h1>Claude Code</h1>
     <div id="header-actions">
@@ -245,6 +305,11 @@
       <div id="loading-msg">Loading terminal…</div>
     </div>
   </div>
+  <!-- Mobile key toolbar (touch devices only), populated from KEYS at runtime.
+       Must stay buttons-only: the pointerdown handler calls preventDefault() to
+       keep focus on the terminal, which would break any control that genuinely
+       needs focus (input, select, link). -->
+  <div id="keybar" role="toolbar" aria-label="Terminal keys"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
@@ -352,6 +417,8 @@ let tokenExpiresAt = 0;
 let refreshTimer = null;
 let tokenInFlight = null; // dedup concurrent fetches from multiple panes
 
+const appEl = document.getElementById('app');
+const keybarEl = document.getElementById('keybar');
 const statusEl = document.getElementById('status');
 const loadingEl = document.getElementById('loading');
 const loadingMsgEl = document.getElementById('loading-msg');
@@ -497,16 +564,23 @@ class Pane {
     });
     this.resizeObserver.observe(this.el);
 
-    // Input handlers registered once — this.ws always points at the live socket
-    this.terminal.onData((data) => {
-      if (!this.ws || this.ws.readyState !== 1) return;
-      const encoded = new TextEncoder().encode(data);
-      const msg = new Uint8Array(1 + encoded.length);
-      msg[0] = 0x30;
-      msg.set(encoded, 1);
-      this.ws.send(msg);
-    });
+    // Input handlers registered once — this.ws always points at the live socket.
+    // Characters typed on a *software* keyboard arrive here, so this is where an
+    // armed sticky modifier from the mobile key bar gets applied.
+    this.terminal.onData((data) => this.send(applyModifiers(data)));
     this.terminal.onResize(() => this.sendResize());
+  }
+
+  // The single exit path for terminal input: UTF-8 + the ttyd input opcode '0'
+  // (0x30). Both typed characters and synthetic keys from the mobile key bar go
+  // through here, so they are indistinguishable on the wire.
+  send(data) {
+    if (!data || !this.ws || this.ws.readyState !== 1) return;
+    const encoded = new TextEncoder().encode(data);
+    const msg = new Uint8Array(1 + encoded.length);
+    msg[0] = 0x30;
+    msg.set(encoded, 1);
+    this.ws.send(msg);
   }
 
   focus() {
@@ -730,6 +804,24 @@ function closePane(id) {
   first?.focus();
 }
 
+// Where synthetic input goes. Falls back to the first pane (focusing it) so the
+// key bar still works before the user has tapped a terminal.
+function targetPane() {
+  if (focusedPane && !focusedPane.closed) return focusedPane;
+  const first = panes.values().next().value;
+  first?.focus();
+  return first || null;
+}
+
+// Panes shrink when the key bar appears or the software keyboard opens — refit
+// so `rows` follows and the ttyd resize frame goes out, instead of leaving the
+// cursor row hidden underneath.
+function refitPanes() {
+  requestAnimationFrame(() => {
+    for (const pane of panes.values()) { try { pane.fitAddon.fit(); } catch {} }
+  });
+}
+
 // ── Aggregate status ──────────────────────────────────────────────────────────
 function updateStatus() {
   if (isWarmingUp()) {
@@ -748,6 +840,195 @@ function updateStatus() {
     setStatus('Connecting…');
   }
 }
+
+// ── Mobile key toolbar ───────────────────────────────────────────────────────
+// Software keyboards have no Esc, no Ctrl, and no arrow keys, which makes both
+// Claude Code's TUI and ordinary shell work unreachable on a phone. On touch
+// devices we render a row of those keys below the panes. All of this is inert on
+// desktop: the bar is display:none and the viewport tracking below is skipped.
+
+// Sticky modifiers: off → armed (applies to one key) → locked (until cleared).
+// Locked exists because Ctrl-a Ctrl-k style sequences are common enough that
+// re-arming each time is painful.
+const modState = { ctrl: 'off', alt: 'off' };
+
+function cycleModifier(name) {
+  modState[name] = { off: 'armed', armed: 'locked', locked: 'off' }[modState[name]];
+  renderModifiers();
+}
+
+// Report which modifiers are active, then drop the one-shot ones.
+function consumeModifiers() {
+  const active = { ctrl: modState.ctrl !== 'off', alt: modState.alt !== 'off' };
+  let changed = false;
+  for (const name of ['ctrl', 'alt']) {
+    if (modState[name] === 'armed') { modState[name] = 'off'; changed = true; }
+  }
+  if (changed) renderModifiers();
+  return active;
+}
+
+// Ctrl-<char> → the classic control code; characters without one pass through.
+const CTRL_PUNCT = { '@': 0x00, ' ': 0x00, '[': 0x1b, '\\': 0x1c, ']': 0x1d, '^': 0x1e, '_': 0x1f, '?': 0x7f };
+
+function applyCtrl(ch) {
+  if (/^[a-zA-Z]$/.test(ch)) return String.fromCharCode(ch.toUpperCase().charCodeAt(0) & 0x1f);
+  const code = CTRL_PUNCT[ch];
+  return code === undefined ? ch : String.fromCharCode(code);
+}
+
+// Alt-<char> goes out ESC-prefixed, which is what readline and TUIs expect.
+function applyAlt(str) { return '\x1b' + str; }
+
+// Applied to characters coming from the software keyboard, so "tap Ctrl, then
+// type c" produces ^C — the combination a row of fixed ^C/^D buttons could never
+// generalise. Multi-character payloads (paste, IME commit) pass through
+// untouched: mangling only the first character would be worse than ignoring the
+// modifier, but we still clear it so it can't linger unnoticed.
+function applyModifiers(data) {
+  if (modState.ctrl === 'off' && modState.alt === 'off') return data;
+  const { ctrl, alt } = consumeModifiers();
+  if ([...data].length !== 1) return data;
+  let out = ctrl ? applyCtrl(data) : data;
+  if (alt) out = applyAlt(out);
+  return out;
+}
+
+// Arrow/Home/End encoding depends on DECCKM. At a shell prompt the CSI form is
+// right, but a program that enabled application cursor keys mode looks up
+// terminfo's \EOA and won't recognise \E[A — so arrows would silently do nothing
+// in exactly the TUI this feature exists to fix. Read the mode per press.
+// (`terminal.modes` is public API in xterm 5.3; guarded so a CDN version bump
+// degrades to normal-mode sequences rather than throwing.)
+const CURSOR_FINALS = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' };
+
+function cursorSeq(term, name, mods) {
+  const final = CURSOR_FINALS[name];
+  if (mods.ctrl || mods.alt) {
+    // The parameterised form carries the modifier and is unambiguous either way,
+    // so the DECCKM lookup only applies to the unmodified case.
+    return `\x1b[1;${1 + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0)}${final}`;
+  }
+  return ((term?.modes?.applicationCursorKeysMode ?? false) ? '\x1bO' : '\x1b[') + final;
+}
+
+// `seq` receives the target terminal and the active modifiers, and returns the
+// bytes to send. Modifier buttons carry `mod` instead.
+const KEYS = [
+  { label: 'Esc',  seq: () => '\x1b' },
+  { label: 'Tab',  seq: () => '\t' },
+  { label: '⇧Tab', seq: () => '\x1b[Z' },
+  { sep: true },
+  { label: 'Ctrl', mod: 'ctrl' },
+  { label: 'Alt',  mod: 'alt' },
+  { sep: true },
+  { label: '←', seq: (t, m) => cursorSeq(t, 'left', m) },
+  { label: '↓', seq: (t, m) => cursorSeq(t, 'down', m) },
+  { label: '↑', seq: (t, m) => cursorSeq(t, 'up', m) },
+  { label: '→', seq: (t, m) => cursorSeq(t, 'right', m) },
+  { sep: true },
+  { label: 'Home', seq: (t, m) => cursorSeq(t, 'home', m) },
+  { label: 'End',  seq: (t, m) => cursorSeq(t, 'end', m) },
+  { label: 'PgUp', seq: () => '\x1b[5~' },
+  { label: 'PgDn', seq: () => '\x1b[6~' },
+];
+
+const modButtons = {};
+let keybarBuilt = false;
+
+// An invisible sticky modifier is a trap, so all three states are distinct.
+function renderModifiers() {
+  for (const [name, btn] of Object.entries(modButtons)) {
+    btn.classList.toggle('mod-armed', modState[name] === 'armed');
+    btn.classList.toggle('mod-locked', modState[name] === 'locked');
+    btn.setAttribute('aria-pressed', String(modState[name] !== 'off'));
+  }
+}
+
+function buildKeybar() {
+  if (keybarBuilt) return;
+  keybarBuilt = true;
+  for (const key of KEYS) {
+    if (key.sep) {
+      const sep = document.createElement('span');
+      sep.className = 'keybar-sep';
+      keybarEl.appendChild(sep);
+      continue;
+    }
+    const btn = document.createElement('button');
+    btn.className = 'keybar-btn';
+    btn.type = 'button';
+    btn.textContent = key.label;
+    // preventDefault() on pointerdown is what keeps focus on xterm's textarea —
+    // without it every press would dismiss the software keyboard. It also
+    // suppresses the follow-up click, so the key fires here, exactly once.
+    // pointerdown rather than touchstart so stylus and hybrid devices work too.
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); pressKey(key); });
+    if (key.mod) modButtons[key.mod] = btn;
+    keybarEl.appendChild(btn);
+  }
+  renderModifiers();
+}
+
+function pressKey(key) {
+  if (key.mod) { cycleModifier(key.mod); return; }
+  const pane = targetPane();
+  if (!pane) return;
+  // Armed modifiers are consumed by whatever key comes next, including keys with
+  // no modified form — leaving one armed would be a mode with no way out.
+  const mods = consumeModifiers();
+  pane.send(key.seq(pane.terminal, mods)); // no-op if that pane's socket is down
+  pane.focus(); // so the very first tap on a fresh page also raises the keyboard
+}
+
+// "Is this a finger-first device" — the question we actually care about. UA
+// sniffing misclassifies iPads (they report desktop Safari) and maxTouchPoints
+// alone lights up on touch-enabled laptops, where the bar is pure clutter. This
+// also updates live, so devtools device mode works without a reload.
+const touchQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+
+function applyTouchMode() {
+  const touch = touchQuery.matches;
+  document.body.classList.toggle('touch', touch);
+  if (touch) buildKeybar(); // built lazily: desktop pays for one media query
+  syncViewport();
+  refitPanes();
+}
+
+// iOS Safari ignores interactive-widget=resizes-content: the layout viewport
+// keeps its full height and the keyboard slides over it, so only visualViewport
+// sees the space that's actually left. Android Chrome already shrinks the layout
+// viewport, where this agrees with 100dvh. We never try to detect "keyboard
+// open" — we just consume whatever height we're handed, open or closed.
+const vv = window.visualViewport;
+let vvFrame = null;
+
+function syncViewport() {
+  if (!vv || vvFrame) return;
+  vvFrame = requestAnimationFrame(() => {
+    vvFrame = null;
+    if (!touchQuery.matches) {
+      // Desktop stays on the plain 100dvh path, untouched by any of this.
+      document.documentElement.style.removeProperty('--app-h');
+      appEl.style.transform = '';
+      return;
+    }
+    document.documentElement.style.setProperty('--app-h', `${vv.height}px`);
+    // iOS scrolls the page to reveal the focused input — undo that, and shift
+    // the app down to wherever the visual viewport now starts.
+    appEl.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+    refitPanes();
+  });
+}
+
+if (vv) {
+  vv.addEventListener('resize', syncViewport);
+  vv.addEventListener('scroll', syncViewport);
+}
+// Without visualViewport, --app-h is never set and #app falls back to 100dvh.
+touchQuery.addEventListener('change', applyTouchMode);
+applyTouchMode();
 
 // ── Visibility-change: reconnect immediately when tab comes back ──────────────
 document.addEventListener('visibilitychange', () => {
