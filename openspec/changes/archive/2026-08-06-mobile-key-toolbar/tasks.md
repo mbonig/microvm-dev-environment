@@ -15,6 +15,8 @@
 - [x] 2.2 Implement mode-aware cursor-key resolution reading
       `terminal.modes?.applicationCursorKeysMode ?? false` — `\x1b[A` vs `\x1bOA`
       for arrows and `\x1b[H`/`\x1b[F` vs `\x1bOH`/`\x1bOF` for Home/End
+      — Home/End were removed after shipping (zsh binds neither, so they only
+      beeped); the arrow half of this is what remains
 - [x] 2.3 Implement the modified-cursor form `\x1b[1;<m><final>` with
       `m = 1 + shift + 2*alt + 4*ctrl`, used whenever a modifier is active
       (bypassing the DECCKM lookup)
@@ -79,9 +81,9 @@
 - [x] 7.1 Desktop regression: toolbar absent from the DOM flow, pane geometry and
       typing byte-identical to before
 - [ ] 7.2 Android Chrome: keyboard open/close keeps the toolbar flush above the
-      keyboard, cursor row always visible, panes refit both ways
+      keyboard, cursor row always visible, panes refit both ways — **deferred**
 - [ ] 7.3 iOS Safari on a real device: same as 7.2, plus rotation with the
-      keyboard open and no page-scroll drift
+      keyboard open and no page-scroll drift — **deferred**
 - [x] 7.4 Shell checks: `↑` recalls history, `Tab` completes, `Ctrl`+`c` aborts a
       `sleep 100`, `Ctrl`+`d` at an empty prompt ends the shell
 - [x] 7.5 TUI checks: inside Claude Code and `vim`, arrows navigate (DECCKM path)
@@ -109,8 +111,32 @@ How 7.4–7.8 were verified — three suites, all green:
 - **PTY** (20 assertions): the exact emitted byte sequences fed into a real `zsh`
   and `vim` over a pty, so the bytes are checked for meaning and not just shape.
 
-7.2/7.3 remain open: Chromium emulation cannot raise a software keyboard, so the
-keyboard-open/close and iOS `visualViewport` behaviour still need real hardware.
+## Deferred at archive time
+
+**7.2 (Android Chrome) and 7.3 (iOS Safari) were never run.** They are left unchecked on
+purpose: this change was archived with them outstanding, and a "deferred" marker
+that made the tooling report 33/33 would have read as "fully verified" to anyone
+who did not open this file. 33/35 is the true number.
+
+Neither is automatable here: Chromium emulation cannot raise a software keyboard,
+so the keyboard-open/close geometry and iOS Safari's `visualViewport` path have
+no test that can reach them. No WebKit build is installed either, and even one
+would not reproduce iOS keyboard geometry — the design notes say as much
+("the simulator does not reproduce keyboard geometry faithfully").
+
+What *was* verified in Chromium with Pixel 7 emulation: the bar sits below the
+panes with no overlap, is flush to the app bottom, has ≥40×40 px tap targets on a
+single scrollable row, and pane `rows` shrinks around it. What is untested is
+purely the behaviour while a real software keyboard is open or closing.
+
+The risk this leaves is concentrated in one place — the `visualViewport` handler
+(`syncViewport()` in `frontend/index.html`), specifically `--app-h`, the
+`offsetTop` translate, and the `scrollTo(0, 0)`. If the toolbar is ever reported
+as floating mid-screen, hidden behind the keyboard, or drifting after rotation,
+that function is where to look first; nothing else in the change is unverified.
+
+To close these, open the deployed frontend on a real Android phone and a real
+iPhone and run the two checks as written above.
 
 ## 8. Documentation
 
