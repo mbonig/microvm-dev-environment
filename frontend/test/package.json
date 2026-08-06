@@ -1,0 +1,15 @@
+{
+  "name": "frontend-tests",
+  "private": true,
+  "type": "module",
+  "description": "Verification suites for frontend/index.html. Not part of the deploy — index.html ships to S3 on its own.",
+  "scripts": {
+    "test": "node unit.mjs && node browser.mjs && python3 ptycheck.py",
+    "test:unit": "node unit.mjs",
+    "test:browser": "node browser.mjs",
+    "test:pty": "python3 ptycheck.py"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}
